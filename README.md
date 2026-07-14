@@ -1,6 +1,6 @@
 # 鸭嘴兽单词（Platypus Words）
 
-鸭嘴兽单词是一个面向 Web 与后续 Android 客户端的个人单词本 Demo。当前版本包含单词检索、近反义词对比、分组收藏、基于间隔复习的每日任务、三类练习题和键盘控制的卡片学习。
+鸭嘴兽单词是一个面向 Web 与后续 Android 客户端的个人单词本 Demo。当前版本包含单词检索、近反义词对比、个人笔记、分组收藏、基于间隔复习的每日任务、三类交错练习题、词库详情和键盘控制的卡片学习。
 
 当前项目是本地可运行的全栈 Web Demo。单词检索使用内置示例词库模拟后续 LLM 服务，收藏分组与学习进度存储在 Cloudflare D1 的本地开发实例中。
 
@@ -89,13 +89,15 @@ npm run start
 }
 ```
 
-本地开发时，数据库由 Wrangler/Miniflare 自动模拟。首次访问 `/api/state` 时会自动创建表，并初始化三个分组以及默认收藏组中的 20 个示例词。
+本地开发时，数据库由 Wrangler/Miniflare 自动模拟。首次访问 `/api/state` 时会自动创建表，并初始化三个分组以及默认收藏组中的 20 个示例词。旧版 `saved_words` 数据会自动迁移到新的个人单词、分组关系和全局复习状态中。
 
 数据库结构位于：
 
 ```text
 db/schema.ts
 ```
+
+主要数据按职责拆分为：公共词典 `dictionary_entries`、个人笔记与复习状态 `user_words`、分组关系 `group_words`，以及可恢复的 `review_sessions`、`review_tasks` 和答题历史 `review_events`。
 
 修改数据库结构后生成迁移：
 
@@ -178,11 +180,14 @@ Content-Type: application/json
 
 - `createGroup`：创建单词分组。
 - `saveWord`：收藏单词到指定分组。
-- `reviewWord`：记录复习结果并计算下一次复习日期。
+- `updateNote`：保存用户针对单词的个人笔记。
+- `beginReview`：按到期日创建或恢复一组最多 10 个单词的复习会话。
+- `answerTask`：保存单题结果；一个单词的三种题型完成后更新下次复习日期。
+- `cancelReview`：结束未完成的复习会话而不修改单词进度。
 
 ## 当前 Demo 边界
 
-- 使用固定示例词库，尚未连接正式 LLM。
+- 服务端词典数据库当前由固定示例词库初始化，尚未连接正式 LLM。
 - 使用本地体验账号，尚未实现多用户登录与数据隔离。
 - 发音使用浏览器的 Speech Synthesis API，不是服务器音频文件。
 - 尚未开发 Android 客户端。

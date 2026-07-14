@@ -1,14 +1,93 @@
-import { integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+
+export const dictionaryEntries = sqliteTable("dictionary_entries", {
+  word: text("word").primaryKey(),
+  phonetic: text("phonetic").notNull(),
+  part: text("part").notNull(),
+  meaning: text("meaning").notNull(),
+  summary: text("summary").notNull(),
+  example: text("example").notNull(),
+  exampleZh: text("example_zh").notNull(),
+  synonyms: text("synonyms").notNull(),
+  antonyms: text("antonyms").notNull(),
+  source: text("source").notNull().default("demo-dictionary"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
 
 export const wordGroups = sqliteTable("word_groups", {
   id: text("id").primaryKey(),
+  userId: text("user_id").notNull().default("local-demo"),
   name: text("name").notNull(),
   color: text("color").notNull().default("#f28c52"),
   isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull(),
 });
 
-export const savedWords = sqliteTable("saved_words", {
+export const userWords = sqliteTable("user_words", {
+  userId: text("user_id").notNull(),
+  word: text("word").notNull().references(() => dictionaryEntries.word, { onDelete: "cascade" }),
+  note: text("note").notNull().default(""),
+  firstSavedAt: text("first_saved_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  ease: integer("ease").notNull().default(250),
+  intervalDays: integer("interval_days").notNull().default(0),
+  repetitions: integer("repetitions").notNull().default(0),
+  nextReview: text("next_review").notNull(),
+  lastReviewed: text("last_reviewed"),
+}, (table) => [
+  primaryKey({ columns: [table.userId, table.word] }),
+  index("user_words_review_idx").on(table.userId, table.nextReview),
+]);
+
+export const groupWords = sqliteTable("group_words", {
+  userId: text("user_id").notNull(),
+  groupId: text("group_id").notNull().references(() => wordGroups.id, { onDelete: "cascade" }),
+  word: text("word").notNull().references(() => dictionaryEntries.word, { onDelete: "cascade" }),
+  addedAt: text("added_at").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.userId, table.groupId, table.word] }),
+  index("group_words_group_idx").on(table.userId, table.groupId),
+]);
+
+export const reviewSessions = sqliteTable("review_sessions", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  groupId: text("group_id").notNull().references(() => wordGroups.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("active"),
+  wordCount: integer("word_count").notNull(),
+  totalTasks: integer("total_tasks").notNull(),
+  createdAt: text("created_at").notNull(),
+  completedAt: text("completed_at"),
+}, (table) => [index("review_sessions_status_idx").on(table.userId, table.groupId, table.status)]);
+
+export const reviewTasks = sqliteTable("review_tasks", {
+  id: text("id").primaryKey(),
+  sessionId: text("session_id").notNull().references(() => reviewSessions.id, { onDelete: "cascade" }),
+  word: text("word").notNull().references(() => dictionaryEntries.word, { onDelete: "cascade" }),
+  questionType: text("question_type").notNull(),
+  position: integer("position").notNull(),
+  options: text("options").notNull(),
+  correctAnswer: text("correct_answer").notNull(),
+  selectedAnswer: text("selected_answer"),
+  isCorrect: integer("is_correct", { mode: "boolean" }),
+  answeredAt: text("answered_at"),
+}, (table) => [uniqueIndex("review_tasks_position_idx").on(table.sessionId, table.position)]);
+
+export const reviewEvents = sqliteTable("review_events", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  sessionId: text("session_id").notNull().references(() => reviewSessions.id, { onDelete: "cascade" }),
+  taskId: text("task_id").notNull().references(() => reviewTasks.id, { onDelete: "cascade" }),
+  word: text("word").notNull().references(() => dictionaryEntries.word, { onDelete: "cascade" }),
+  questionType: text("question_type").notNull(),
+  isCorrect: integer("is_correct", { mode: "boolean" }).notNull(),
+  answeredAt: text("answered_at").notNull(),
+});
+
+// Kept during the transition so existing local and deployed data can be migrated
+// into user_words and group_words without being discarded.
+export const legacySavedWords = sqliteTable("saved_words", {
   word: text("word").notNull(),
   groupId: text("group_id").notNull().references(() => wordGroups.id, { onDelete: "cascade" }),
   addedAt: text("added_at").notNull(),
