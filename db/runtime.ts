@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { dictionary, type WordEntry } from "../lib/dictionary";
+import { relationDetails, type RelationDetail } from "../lib/relations";
 
 export const DEMO_USER_ID = "local-demo";
 const TIME_ZONE = "Asia/Shanghai";
@@ -49,7 +50,19 @@ export function getD1() {
   return env.DB;
 }
 
-export async function ensureDatabase() {
+let databaseReady: Promise<void> | null = null;
+
+export function ensureDatabase() {
+  if (!databaseReady) {
+    databaseReady = initializeDatabase().catch((error) => {
+      databaseReady = null;
+      throw error;
+    });
+  }
+  return databaseReady;
+}
+
+async function initializeDatabase() {
   const db = getD1();
   await db.batch([
     db.prepare(`CREATE TABLE IF NOT EXISTS dictionary_entries (
@@ -65,6 +78,16 @@ export async function ensureDatabase() {
       source TEXT NOT NULL DEFAULT 'demo-dictionary',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
+    )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS word_relations (
+      source_word TEXT NOT NULL,
+      related_word TEXT NOT NULL,
+      relation_type TEXT NOT NULL,
+      comparison TEXT NOT NULL,
+      usage TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (source_word, related_word, relation_type),
+      FOREIGN KEY (source_word) REFERENCES dictionary_entries(word) ON DELETE CASCADE
     )`),
     db.prepare(`CREATE TABLE IF NOT EXISTS word_groups (
       id TEXT PRIMARY KEY,
@@ -148,6 +171,7 @@ export async function ensureDatabase() {
       FOREIGN KEY (word) REFERENCES dictionary_entries(word) ON DELETE CASCADE
     )`),
     db.prepare("CREATE INDEX IF NOT EXISTS group_words_group_idx ON group_words(user_id, group_id)"),
+    db.prepare("CREATE INDEX IF NOT EXISTS word_relations_source_idx ON word_relations(source_word, sort_order)"),
     db.prepare("CREATE INDEX IF NOT EXISTS user_words_review_idx ON user_words(user_id, next_review)"),
     db.prepare("CREATE INDEX IF NOT EXISTS review_sessions_status_idx ON review_sessions(user_id, group_id, status)"),
     db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS review_tasks_position_idx ON review_tasks(session_id, position)"),
@@ -168,6 +192,12 @@ export async function ensureDatabase() {
       updated_at = excluded.updated_at`)
     .bind(entry.word, entry.phonetic, entry.part, entry.meaning, entry.summary, entry.example,
       entry.exampleZh, JSON.stringify(entry.synonyms), JSON.stringify(entry.antonyms), timestamp, timestamp)));
+  await db.batch(Object.entries(relationDetails).flatMap(([sourceWord, relations]) => relations.map((relation, sortOrder) =>
+    db.prepare(`INSERT INTO word_relations
+      (source_word, related_word, relation_type, comparison, usage, sort_order)
+      VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(source_word, related_word, relation_type)
+      DO UPDATE SET comparison = excluded.comparison, usage = excluded.usage, sort_order = excluded.sort_order`)
+      .bind(sourceWord, relation.word, relation.type, relation.comparison, relation.usage, sortOrder))));
 
   const groupCount = await db.prepare("SELECT COUNT(*) AS count FROM word_groups WHERE user_id = ?")
     .bind(DEMO_USER_ID).first<{ count: number }>();
@@ -202,7 +232,7 @@ export async function ensureDatabase() {
   }
 }
 
-function parseEntry(row: Record<string, unknown>): WordEntry {
+function parseEntry(row: Record<string, unknown>, relations: RelationDetail[] = []): WordEntry {
   return {
     word: String(row.word),
     phonetic: String(row.phonetic),
@@ -213,7 +243,26 @@ function parseEntry(row: Record<string, unknown>): WordEntry {
     exampleZh: String(row.example_zh),
     synonyms: JSON.parse(String(row.synonyms)) as [string, string],
     antonyms: JSON.parse(String(row.antonyms)) as [string, string],
+    relations,
   };
+}
+
+function normalizeRelation(row: Record<string, unknown>): RelationDetail {
+  return {
+    word: String(row.related_word),
+    type: String(row.relation_type) as RelationDetail["type"],
+    comparison: String(row.comparison),
+    usage: String(row.usage),
+  };
+}
+
+function relationMap(rows: Record<string, unknown>[]) {
+  const map = new Map<string, RelationDetail[]>();
+  for (const row of rows) {
+    const source = String(row.source_word);
+    map.set(source, [...(map.get(source) ?? []), normalizeRelation(row)]);
+  }
+  return map;
 }
 
 export async function searchDictionary(query: string) {
@@ -224,11 +273,15 @@ export async function searchDictionary(query: string) {
   const row = exact ?? await db.prepare("SELECT * FROM dictionary_entries WHERE word LIKE ? ORDER BY length(word), word LIMIT 1")
     .bind(`%${query}%`).first<Record<string, unknown>>();
   if (!row) return null;
-  const meta = await db.prepare(`SELECT uw.*, GROUP_CONCAT(gw.group_id) AS group_ids
-    FROM user_words uw LEFT JOIN group_words gw ON gw.user_id = uw.user_id AND gw.word = uw.word
-    WHERE uw.user_id = ? AND uw.word = ? GROUP BY uw.user_id, uw.word`)
-    .bind(DEMO_USER_ID, String(row.word)).first<Record<string, unknown>>();
-  return { entry: parseEntry(row), meta: meta ? normalizeMeta(meta) : null };
+  const [meta, relations] = await Promise.all([
+    db.prepare(`SELECT uw.*, GROUP_CONCAT(gw.group_id) AS group_ids
+      FROM user_words uw LEFT JOIN group_words gw ON gw.user_id = uw.user_id AND gw.word = uw.word
+      WHERE uw.user_id = ? AND uw.word = ? GROUP BY uw.user_id, uw.word`)
+      .bind(DEMO_USER_ID, String(row.word)).first<Record<string, unknown>>(),
+    db.prepare(`SELECT * FROM word_relations WHERE source_word = ? ORDER BY sort_order`)
+      .bind(String(row.word)).all<Record<string, unknown>>(),
+  ]);
+  return { entry: parseEntry(row, relations.results.map(normalizeRelation)), meta: meta ? normalizeMeta(meta) : null };
 }
 
 function normalizeMeta(row: Record<string, unknown>) {
@@ -247,7 +300,7 @@ function normalizeMeta(row: Record<string, unknown>) {
 export async function loadState() {
   await ensureDatabase();
   const db = getD1();
-  const [groups, memberships, metas] = await Promise.all([
+  const [groups, memberships, metas, relations] = await Promise.all([
     db.prepare(`SELECT g.*, COUNT(gw.word) AS word_count,
       SUM(CASE WHEN uw.next_review <= ? THEN 1 ELSE 0 END) AS due_count
       FROM word_groups g
@@ -267,7 +320,10 @@ export async function loadState() {
       FROM user_words uw LEFT JOIN group_words gw ON gw.user_id = uw.user_id AND gw.word = uw.word
       WHERE uw.user_id = ? GROUP BY uw.user_id, uw.word ORDER BY uw.first_saved_at DESC`)
       .bind(DEMO_USER_ID).all<Record<string, unknown>>(),
+    db.prepare("SELECT * FROM word_relations ORDER BY source_word, sort_order").all<Record<string, unknown>>(),
   ]);
+
+  const relationsByWord = relationMap(relations.results);
 
   return {
     groups: groups.results.map((group) => ({ ...group, word_count: Number(group.word_count), due_count: Number(group.due_count) })),
@@ -280,7 +336,7 @@ export async function loadState() {
       repetitions: Number(row.repetitions ?? 0),
       next_review: String(row.next_review),
       last_reviewed: row.last_reviewed ? String(row.last_reviewed) : null,
-      entry: parseEntry(row),
+      entry: parseEntry(row, relationsByWord.get(String(row.word)) ?? []),
     })),
     wordMeta: metas.results.map(normalizeMeta),
   };
@@ -344,14 +400,15 @@ export async function beginReviewSession(groupId: string) {
     .bind(DEMO_USER_ID, groupId, today()).all<Record<string, unknown>>();
   if (!due.results.length) return null;
 
-  const entries = due.results.map(parseEntry);
+  const entries = due.results.map((row) => parseEntry(row));
   const allEntriesResult = await db.prepare("SELECT * FROM dictionary_entries ORDER BY word").all<Record<string, unknown>>();
-  const allEntries = allEntriesResult.results.map(parseEntry);
-  const types: QuestionType[] = ["audio-word", "word-meaning", "meaning-word"];
+  const allEntries = allEntriesResult.results.map((row) => parseEntry(row));
   const tasks: { word: string; type: QuestionType; options: string[]; correct: string }[] = [];
   for (let round = 0; round < 3; round += 1) {
     const roundTasks = shuffle(entries.map((entry, index) => {
-      const type = types[(round + index) % types.length];
+      const secondType: QuestionType = index % 2 === 0 ? "word-meaning" : "meaning-word";
+      const type: QuestionType = round === 0 ? "audio-word" : round === 1
+        ? secondType : secondType === "word-meaning" ? "meaning-word" : "word-meaning";
       return { word: entry.word, type, ...taskOptions(type, entry, allEntries) };
     }));
     if (tasks.length && roundTasks[0]?.word === tasks.at(-1)?.word && roundTasks.length > 1) {

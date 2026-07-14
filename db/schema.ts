@@ -15,6 +15,18 @@ export const dictionaryEntries = sqliteTable("dictionary_entries", {
   updatedAt: text("updated_at").notNull(),
 });
 
+export const wordRelations = sqliteTable("word_relations", {
+  sourceWord: text("source_word").notNull().references(() => dictionaryEntries.word, { onDelete: "cascade" }),
+  relatedWord: text("related_word").notNull(),
+  relationType: text("relation_type").notNull(),
+  comparison: text("comparison").notNull(),
+  usage: text("usage").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+}, (table) => [
+  primaryKey({ columns: [table.sourceWord, table.relatedWord, table.relationType] }),
+  index("word_relations_source_idx").on(table.sourceWord, table.sortOrder),
+]);
+
 export const wordGroups = sqliteTable("word_groups", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().default("local-demo"),

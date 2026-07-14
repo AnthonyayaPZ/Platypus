@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { WordEntry } from "../lib/dictionary";
+import type { RelationDetail } from "../lib/relations";
 
 type View = "search" | "review" | "cards" | "library";
 type Group = { id: string; name: string; color: string; is_default: number; word_count: number; due_count: number };
@@ -105,6 +106,7 @@ export default function Home() {
     <aside className="sidebar">
       <button className="brand" onClick={() => setView("search")} aria-label="鸭嘴兽单词首页">
         <span className="brand-mark"><span className="brand-eye" /></span>
+        <span className="brand-uploaded-icon" aria-hidden="true" />
         <span className="brand-copy"><b>鸭嘴兽</b><small>PLATYPUS WORDS</small></span>
       </button>
       <button className="collapse-btn" onClick={toggleSidebar} aria-label={sidebarCollapsed ? "展开侧栏" : "收起侧栏"}>{sidebarCollapsed ? "›" : "‹"}</button>
@@ -114,7 +116,7 @@ export default function Home() {
         </button>)}
       </nav>
       <div className="sidebar-bottom">
-        <div className="streak"><span>✦</span><div><b>按节奏复习</b><small>今天到期 {groups.reduce((sum, group) => sum + group.due_count, 0)} 词</small></div></div>
+        <div className="streak"><span>✦</span><div><b>按节奏复习</b><small>今日待复习 {groups.reduce((sum, group) => sum + group.due_count, 0)} 词</small></div></div>
         <div className="avatar"><span>PL</span><div><b>学习者</b><small>本地体验账号</small></div></div>
       </div>
     </aside>
@@ -166,7 +168,7 @@ function SearchView({ query, setQuery, result, groups, selectedGroup, setSelecte
           <WordLearningContent key={result.word} entry={result} meta={meta} groups={groups} onSaveNote={saveNote} showMetadata />
         </article> : <div className="search-empty"><span className="brand-mark"><span className="brand-eye" /></span><h2>搜索一个真正想记住的词</h2><p>这里会展示释义、例句、近反义词和你的个人笔记。</p></div>}
       </div>
-      <aside className="today-panel"><div className="today-head"><span>今日计划</span><small>按到期日安排</small></div><div className="progress-ring" style={{ "--progress": `${Math.min(100, due * 10)}%` } as React.CSSProperties}><div><b>{due}</b><small>待复习</small></div></div><h3>每次专注练习 10 个词</h3><p>任务量来自收藏日期和学习历史；每组最多 30 道交错题目。</p><button onClick={() => setView("review")}>查看今日任务 <span>→</span></button><div className="mini-stats"><div><b>{total}</b><small>已收藏</small></div><i /><div><b>{Math.min(10, due)}</b><small>下一组</small></div></div></aside>
+      <aside className="today-panel"><div className="today-head"><span>今日计划</span><small>按学习节奏安排</small></div><div className="progress-ring" style={{ "--progress": `${Math.min(100, due * 10)}%` } as React.CSSProperties}><div><b>{due}</b><small>待复习</small></div></div><h3>每次专注练习 10 个词</h3><p>完成这一组后，如果还有内容，可以继续下一组。</p><button onClick={() => setView("review")}>查看今日任务 <span>→</span></button><div className="mini-stats"><div><b>{total}</b><small>已收藏</small></div><i /><div><b>{Math.min(10, due)}</b><small>下一组</small></div></div></aside>
     </div>
   </div>;
 }
@@ -175,8 +177,12 @@ function WordHeading({ entry }: { entry: WordEntry }) {
   return <div><div className="word-heading"><h2>{entry.word}</h2><button className="sound-btn" onClick={() => speak(entry.word)} aria-label={`播放 ${entry.word} 发音`}>◖))</button></div><div className="phonetic"><span>EN</span>{entry.phonetic}<i>{entry.part}</i></div></div>;
 }
 
-function RelationCard({ type, tone, words }: { type: string; tone: string; words: [string, string] }) {
-  return <div className={`relation-card ${tone}`}><div className="relation-icon">{tone === "mint" ? "≈" : "↔"}</div><div><small>{type}表达</small><div className="relation-words">{words.map((word) => <b key={word}>{word}</b>)}</div></div></div>;
+function RelationCard({ type, tone, relations }: { type: string; tone: string; relations: RelationDetail[] }) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+  return <section className={`relation-card ${tone}`}><div className="relation-card-head"><span className="relation-icon">{tone === "mint" ? "≈" : "↔"}</span><div><small>{type}表达</small><b>{tone === "mint" ? "相似，但不完全相同" : "放在对面理解"}</b></div></div><div className="relation-list">{relations.map((relation) => {
+    const open = expanded === relation.word;
+    return <div className="relation-item" key={relation.word}><button aria-expanded={open} onClick={() => setExpanded(open ? null : relation.word)}><b>{relation.word}</b><span>{open ? "收起" : "查看区别"}</span><i>{open ? "−" : "+"}</i></button>{open && <div className="relation-detail"><p>{relation.comparison}</p><div><small>使用场景</small><span>{relation.usage}</span></div></div>}</div>;
+  })}</div></section>;
 }
 
 function WordLearningContent({ entry, meta, groups, onSaveNote, showMetadata = false }: { entry: WordEntry; meta: WordMeta | null; groups: Group[]; onSaveNote: (note: string) => Promise<void>; showMetadata?: boolean }) {
@@ -184,17 +190,19 @@ function WordLearningContent({ entry, meta, groups, onSaveNote, showMetadata = f
   const [saving, setSaving] = useState(false);
   const save = async () => { setSaving(true); try { await onSaveNote(note); } finally { setSaving(false); } };
   const groupNames = (meta?.group_ids ?? []).map((id) => groups.find((group) => group.id === id)?.name).filter(Boolean);
+  const synonymRelations = entry.relations.filter((relation) => relation.type === "synonym");
+  const antonymRelations = entry.relations.filter((relation) => relation.type === "antonym");
   return <>
     <div className="meaning"><small>核心含义</small><h3>{entry.meaning}</h3><p>{entry.summary}</p></div>
     <div className="example"><span>“</span><div><p>{entry.example}</p><small>{entry.exampleZh}</small></div></div>
-    <div className="detail-grid"><RelationCard type="相近" tone="mint" words={entry.synonyms} /><RelationCard type="相反" tone="peach" words={entry.antonyms} /></div>
+    <div className="detail-grid"><RelationCard type="相近" tone="mint" relations={synonymRelations} /><RelationCard type="相反" tone="peach" relations={antonymRelations} /></div>
     <div className="note-editor"><div><small>MY NOTE</small><b>我的注释</b></div><textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="记录遇到它的场景、搭配或记忆线索…" maxLength={2000} /><button disabled={saving} onClick={save}>{saving ? "保存中…" : "保存笔记"}</button></div>
     {showMetadata && <div className="word-metadata"><span><small>首次记录</small><b>{formatDate(meta?.first_saved_at)}</b></span><span><small>所属单词本</small><b>{groupNames.length ? groupNames.join("、") : "尚未收藏"}</b></span><span><small>下次复习</small><b>{meta ? formatDate(meta.next_review) : "收藏后安排"}</b></span></div>}
   </>;
 }
 
 function GroupPicker({ groups, selectedGroup, setSelectedGroup }: { groups: Group[]; selectedGroup: string; setSelectedGroup: (value: string) => void }) {
-  return <select className="group-picker" value={selectedGroup} onChange={(event) => setSelectedGroup(event.target.value)}>{groups.map((group) => <option key={group.id} value={group.id}>{group.name} · {group.word_count} 词 / {group.due_count} 到期</option>)}</select>;
+  return <select className="group-picker" value={selectedGroup} onChange={(event) => setSelectedGroup(event.target.value)}>{groups.map((group) => <option key={group.id} value={group.id}>{group.name} · {group.word_count} 词 / 今日 {group.due_count} 词</option>)}</select>;
 }
 
 function ReviewView({ groups, selectedGroup, setSelectedGroup, postAction, setToast }: { groups: Group[]; selectedGroup: string; setSelectedGroup: (value: string) => void; postAction: (payload: Record<string, unknown>) => Promise<StatePayload>; setToast: (value: string) => void }) {
@@ -218,8 +226,8 @@ function ReviewView({ groups, selectedGroup, setSelectedGroup, postAction, setTo
     finally { setBusy(false); }
   };
 
-  if (!started) return <div className="page focus-page"><div className="focus-top"><div><span className="eyebrow">SPACED REPETITION</span><h1>今日背诵</h1><p>到期多少学多少，每次只取最多 10 个词。</p></div><GroupPicker groups={groups} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} /></div><div className="review-start"><span>{group?.due_count ?? 0}</span><small>个单词今天到期</small><h2>{group?.name}</h2><p>开始后会生成最多 30 道交错题目，同一个词的三种题型不会连续出现。</p><button disabled={busy || !group?.due_count} onClick={begin}>{busy ? "正在准备…" : group?.due_count ? `开始一组 · ${Math.min(10, group.due_count)} 词` : "今天已完成"}</button></div></div>;
-  if (!session) return <div className="page focus-page"><div className="focus-top"><h1>今天的任务完成了</h1><GroupPicker groups={groups} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} /></div><div className="empty-state"><span>✓</span><h2>这个分组没有到期单词</h2><p>下次任务会根据你的收藏日期和答题表现自动出现。</p></div></div>;
+  if (!started) return <div className="page focus-page"><div className="focus-top"><div><span className="eyebrow">TODAY&apos;S REVIEW</span><h1>今日复习</h1><p>根据收藏时间和学习进度，为你安排今天的内容。</p></div><GroupPicker groups={groups} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} /></div><div className="review-start"><span>{group?.due_count ?? 0}</span><small>个单词今天需要复习</small><h2>{group?.name}</h2><p>每次专注完成最多 10 个词，学完可以继续下一组。</p><button disabled={busy || !group?.due_count} onClick={begin}>{busy ? "正在准备…" : group?.due_count ? `开始这一组 · ${Math.min(10, group.due_count)} 词` : "今天已完成"}</button></div></div>;
+  if (!session) return <div className="page focus-page"><div className="focus-top"><h1>今天的任务完成了</h1><GroupPicker groups={groups} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} /></div><div className="empty-state"><span>✓</span><h2>这个分组今天已经完成</h2><p>下一次复习会根据你的收藏时间和答题表现自动安排。</p></div></div>;
 
   const correctCount = session.tasks.filter((task) => task.is_correct).length;
   if (showComplete) return <div className="page focus-page"><div className="complete-card"><span>✓</span><p className="eyebrow">SESSION COMPLETE</p><h1>这一组完成了</h1><p>你完成了 {session.total_tasks} 道题，答对 {correctCount} 道。每个单词已经根据三次综合表现重新安排。</p><button onClick={begin}>继续下一组</button></div></div>;
@@ -242,7 +250,7 @@ function ReviewView({ groups, selectedGroup, setSelectedGroup, postAction, setTo
   const title = task.question_type === "audio-word" ? "听发音，选择正确的单词" : task.question_type === "word-meaning" ? "选择最准确的中文释义" : "根据中文释义，选择正确的单词";
   const label = task.question_type === "audio-word" ? "发音辨词" : task.question_type === "word-meaning" ? "英译中" : "中译英";
 
-  return <div className="page focus-page"><div className="focus-top"><div><span className="eyebrow">10-WORD SESSION</span><h1>交错背诵</h1></div><GroupPicker groups={groups} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} /></div><div className="session-progress"><div><span style={{ width: `${((index + (answered ? 1 : 0)) / session.total_tasks) * 100}%` }} /></div><p><b>{index + 1}</b> / {session.total_tasks} 题</p></div><article className="quiz-card"><div className="quiz-type"><span>{label}</span><small>{session.word_count} 个词 · 三轮交错</small></div><h2>{title}</h2>{task.question_type === "audio-word" ? <button className="audio-orb" onClick={() => speak(task.word)}><span>◖))</span><small>点击播放</small></button> : <div className="quiz-prompt">{task.question_type === "word-meaning" ? task.word : task.meaning}<small>{task.question_type === "word-meaning" ? task.phonetic : "选择最匹配的英文单词"}</small></div>}<div className="option-grid">{task.options.map((option, optionIndex) => <button key={option} disabled={busy} onClick={() => answer(option)} className={answered ? option === task.correct_answer ? "correct" : option === task.selected_answer ? "wrong" : "muted" : ""}><span>{String.fromCharCode(65 + optionIndex)}</span>{option}</button>)}</div>{answered && <div className={`feedback ${task.is_correct ? "good" : "bad"}`}><span>{task.is_correct ? "✓" : "!"}</span><div><b>{task.is_correct ? "回答正确" : `正确答案：${task.correct_answer}`}</b><small>{task.summary}</small></div></div>}<button className="next-btn" disabled={!answered} onClick={next}>{index === session.tasks.length - 1 ? "完成这一组" : "下一题"} <span>→</span></button></article></div>;
+  return <div className="page focus-page"><div className="focus-top"><div><span className="eyebrow">TODAY&apos;S REVIEW</span><h1>今日复习</h1></div><GroupPicker groups={groups} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} /></div><div className="session-progress"><div><span style={{ width: `${((index + (answered ? 1 : 0)) / session.total_tasks) * 100}%` }} /></div><p><b>{index + 1}</b> / {session.total_tasks} 题</p></div><article className="quiz-card"><div className="quiz-type"><span>{label}</span><small>这一组共 {session.word_count} 个词</small></div><h2>{title}</h2>{task.question_type === "audio-word" ? <button className="audio-orb" onClick={() => speak(task.word)}><span>◖))</span><small>点击播放</small></button> : <div className="quiz-prompt">{task.question_type === "word-meaning" ? task.word : task.meaning}<small>{task.question_type === "word-meaning" ? task.phonetic : "选择最匹配的英文单词"}</small></div>}<div className="option-grid">{task.options.map((option, optionIndex) => <button key={option} disabled={busy} onClick={() => answer(option)} className={answered ? option === task.correct_answer ? "correct" : option === task.selected_answer ? "wrong" : "muted" : ""}><span>{String.fromCharCode(65 + optionIndex)}</span>{option}</button>)}</div>{answered && <div className={`feedback ${task.is_correct ? "good" : "bad"}`}><span>{task.is_correct ? "✓" : "!"}</span><div><b>{task.is_correct ? "回答正确" : `正确答案：${task.correct_answer}`}</b><small>{task.summary}</small></div></div>}<button className="next-btn" disabled={!answered} onClick={next}>{index === session.tasks.length - 1 ? "完成这一组" : "下一题"} <span>→</span></button></article></div>;
 }
 
 function CardsView({ groups, selectedGroup, setSelectedGroup, words, metaFor, postAction, setToast }: { groups: Group[]; selectedGroup: string; setSelectedGroup: (value: string) => void; words: SavedWord[]; metaFor: (word: string) => WordMeta | null; postAction: (payload: Record<string, unknown>) => Promise<StatePayload>; setToast: (value: string) => void }) {
@@ -277,5 +285,5 @@ function LibraryView({ groups, savedWords, wordMeta, selectedGroup, setSelectedG
   const create = async () => { if (!name.trim()) return; try { await postAction({ action: "createGroup", name }); setName(""); setToast("新分组已创建"); } catch { setToast("创建失败，请重试"); } };
   const saveNote = async (word: string, note: string) => { await postAction({ action: "updateNote", word, note }); setToast("笔记已保存"); };
   const detailMeta = detail ? wordMeta.find((meta) => meta.word === detail.word) ?? null : null;
-  return <div className="page library-page"><div className="page-title"><div><span className="eyebrow">MY COLLECTION</span><h1>我的词库</h1><p>点击单词，查看完整信息和个人笔记。</p></div><div className="new-group"><input value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && create()} placeholder="新分组名称" /><button onClick={create}>＋ 新建分组</button></div></div><div className="group-cards">{groups.map((group) => <button key={group.id} className={selectedGroup === group.id ? "active" : ""} onClick={() => setSelectedGroup(group.id)}><i style={{ background: group.color }} /><span><b>{group.name}</b><small>{group.word_count} 个单词 · {group.due_count} 个待复习</small></span><em>→</em></button>)}</div><div className="library-list"><div className="list-head"><div><h2>{active?.name}</h2><span>{words.length} WORDS</span></div><button onClick={() => setView("cards")}>用卡片学习</button></div>{words.map((saved) => <button className="word-row" key={saved.word} onClick={() => setDetail(saved)}><span className="row-sound" onClick={(event) => { event.stopPropagation(); speak(saved.word); }}>◖))</span><span className="row-word"><b>{saved.word}</b><small>{saved.entry.phonetic}</small></span><p>{saved.entry.meaning}</p><span className={saved.repetitions > 1 ? "mastered" : "learning"}>{saved.repetitions > 1 ? "已掌握" : "学习中"}</span></button>)}</div>{detail && <div className="detail-overlay" role="dialog" aria-modal="true" aria-label={`${detail.word} 详情`} onClick={() => setDetail(null)}><article className="detail-drawer" onClick={(event) => event.stopPropagation()}><button className="detail-close" onClick={() => setDetail(null)} aria-label="关闭详情">×</button><WordHeading entry={detail.entry} /><WordLearningContent key={detail.word} entry={detail.entry} meta={detailMeta} groups={groups} onSaveNote={(note) => saveNote(detail.word, note)} showMetadata /></article></div>}</div>;
+  return <div className="page library-page"><div className="page-title"><div><span className="eyebrow">MY COLLECTION</span><h1>我的词库</h1><p>点击单词，查看完整信息和个人笔记。</p></div><div className="new-group"><input value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && create()} placeholder="新分组名称" /><button onClick={create}>＋ 新建分组</button></div></div><div className="group-cards">{groups.map((group) => <button key={group.id} className={selectedGroup === group.id ? "active" : ""} onClick={() => setSelectedGroup(group.id)}><i style={{ background: group.color }} /><span><b>{group.name}</b><small>{group.word_count} 个单词 · 今日复习 {group.due_count} 个</small></span><em>→</em></button>)}</div><div className="library-list"><div className="list-head"><div><h2>{active?.name}</h2><span>{words.length} WORDS</span></div><button onClick={() => setView("cards")}>用卡片学习</button></div>{words.map((saved) => <button className="word-row" key={saved.word} onClick={() => setDetail(saved)}><span className="row-sound" onClick={(event) => { event.stopPropagation(); speak(saved.word); }}>◖))</span><span className="row-word"><b>{saved.word}</b><small>{saved.entry.phonetic}</small></span><p>{saved.entry.meaning}</p><span className={saved.repetitions > 1 ? "mastered" : "learning"}>{saved.repetitions > 1 ? "已掌握" : "学习中"}</span></button>)}</div>{detail && <div className="detail-overlay" role="dialog" aria-modal="true" aria-label={`${detail.word} 详情`} onClick={() => setDetail(null)}><article className="detail-drawer" onClick={(event) => event.stopPropagation()}><button className="detail-close" onClick={() => setDetail(null)} aria-label="关闭详情">×</button><WordHeading entry={detail.entry} /><WordLearningContent key={detail.word} entry={detail.entry} meta={detailMeta} groups={groups} onSaveNote={(note) => saveNote(detail.word, note)} showMetadata /></article></div>}</div>;
 }

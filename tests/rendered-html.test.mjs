@@ -13,8 +13,10 @@ test("ships the product UI instead of the starter preview", async () => {
   assert.match(page, /useState\(""\)/, "the search field should start empty");
   assert.match(page, /platypus-sidebar/);
   assert.match(page, /WordLearningContent/);
-  assert.match(page, /开始一组/);
+  assert.match(page, /开始这一组/);
   assert.match(page, /answerTask/);
+  assert.match(page, /aria-expanded/);
+  assert.match(page, /brand-uploaded-icon/);
   assert.match(layout, /鸭嘴兽单词/);
   assert.doesNotMatch(page, /SkeletonPreview|Codex is working/);
 });
@@ -25,11 +27,12 @@ test("keeps personal notes, group membership, and review history separate", asyn
     readFile(new URL("db/runtime.ts", root), "utf8"),
   ]);
 
-  for (const table of ["dictionary_entries", "user_words", "group_words", "review_sessions", "review_tasks", "review_events"]) {
+  for (const table of ["dictionary_entries", "word_relations", "user_words", "group_words", "review_sessions", "review_tasks", "review_events"]) {
     assert.match(schema, new RegExp(table));
   }
   assert.match(runtime, /LIMIT 10/);
   assert.match(runtime, /for \(let round = 0; round < 3/);
+  assert.match(runtime, /round === 0 \? "audio-word"/);
   assert.match(runtime, /correct === 3 \? 5 : correct === 2 \? 4/);
   assert.match(runtime, /Asia\/Shanghai/);
 });
@@ -39,5 +42,6 @@ test("packages every database migration for deployment", async () => {
     access(new URL("dist/.openai/drizzle/0000_majestic_harrier.sql", root)),
     access(new URL("dist/.openai/drizzle/0001_familiar_miracleman.sql", root)),
     access(new URL("dist/.openai/drizzle/0002_giant_black_crow.sql", root)),
+    access(new URL("dist/.openai/drizzle/0003_heavy_karnak.sql", root)),
   ]);
 });
