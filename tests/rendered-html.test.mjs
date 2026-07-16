@@ -5,9 +5,10 @@ import test from "node:test";
 const root = new URL("../", import.meta.url);
 
 test("ships the product UI instead of the starter preview", async () => {
-  const [page, layout] = await Promise.all([
+  const [page, layout, styles] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/layout.tsx", root), "utf8"),
+    readFile(new URL("app/globals.css", root), "utf8"),
   ]);
 
   assert.match(page, /useState\(""\)/, "the search field should start empty");
@@ -17,8 +18,27 @@ test("ships the product UI instead of the starter preview", async () => {
   assert.match(page, /answerTask/);
   assert.match(page, /aria-expanded/);
   assert.match(page, /brand-uploaded-icon/);
+  assert.match(page, /生成中…/);
+  assert.match(styles, /sidebar-collapsed \.brand-copy \{ display: none !important; \}/);
   assert.match(layout, /鸭嘴兽单词/);
   assert.doesNotMatch(page, /SkeletonPreview|Codex is working/);
+});
+
+test("generates and caches dictionary misses on the server", async () => {
+  const [route, llm, runtime] = await Promise.all([
+    readFile(new URL("app/api/search/route.ts", root), "utf8"),
+    readFile(new URL("lib/llm.ts", root), "utf8"),
+    readFile(new URL("db/runtime.ts", root), "utf8"),
+  ]);
+
+  assert.match(route, /generateDictionaryEntry/);
+  assert.match(route, /source: "llm-generated"/);
+  assert.match(route, /\^\[a-z\]\[a-z'-\]/);
+  assert.match(llm, /chat\/completions/);
+  assert.match(llm, /API-KEY/);
+  assert.match(llm, /relations\.length !== 4/);
+  assert.match(runtime, /saveDictionaryEntry/);
+  assert.match(runtime, /DELETE FROM word_relations WHERE source_word/);
 });
 
 test("keeps personal notes, group membership, and review history separate", async () => {
