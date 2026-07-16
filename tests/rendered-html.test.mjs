@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const root = new URL("../", import.meta.url);
@@ -57,11 +57,16 @@ test("keeps personal notes, group membership, and review history separate", asyn
   assert.match(runtime, /Asia\/Shanghai/);
 });
 
-test("packages every database migration for deployment", async () => {
-  await Promise.all([
-    access(new URL("dist/.openai/drizzle/0000_majestic_harrier.sql", root)),
-    access(new URL("dist/.openai/drizzle/0001_familiar_miracleman.sql", root)),
-    access(new URL("dist/.openai/drizzle/0002_giant_black_crow.sql", root)),
-    access(new URL("dist/.openai/drizzle/0003_heavy_karnak.sql", root)),
+test("generates PostgreSQL-compatible schema and migration", async () => {
+  const [schema, migration, config] = await Promise.all([
+    readFile(new URL("db/schema.ts", root), "utf8"),
+    readFile(new URL("drizzle/0000_round_phalanx.sql", root), "utf8"),
+    readFile(new URL("drizzle.config.ts", root), "utf8"),
   ]);
+
+  assert.doesNotMatch(schema, /sqliteTable|drizzle-orm\/sqlite-core/);
+  assert.match(schema, /pgTable|drizzle-orm\/pg-core/);
+  assert.match(migration, /CREATE TABLE "dictionary_entries"/);
+  assert.match(config, /postgresql/);
+  assert.match(config, /DATABASE_URL/);
 });

@@ -1,6 +1,6 @@
-import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { pgTable, text, integer, primaryKey, uniqueIndex, index } from "drizzle-orm/pg-core";
 
-export const dictionaryEntries = sqliteTable("dictionary_entries", {
+export const dictionaryEntries = pgTable("dictionary_entries", {
   word: text("word").primaryKey(),
   phonetic: text("phonetic").notNull(),
   part: text("part").notNull(),
@@ -15,7 +15,7 @@ export const dictionaryEntries = sqliteTable("dictionary_entries", {
   updatedAt: text("updated_at").notNull(),
 });
 
-export const wordRelations = sqliteTable("word_relations", {
+export const wordRelations = pgTable("word_relations", {
   sourceWord: text("source_word").notNull().references(() => dictionaryEntries.word, { onDelete: "cascade" }),
   relatedWord: text("related_word").notNull(),
   relationType: text("relation_type").notNull(),
@@ -27,16 +27,16 @@ export const wordRelations = sqliteTable("word_relations", {
   index("word_relations_source_idx").on(table.sourceWord, table.sortOrder),
 ]);
 
-export const wordGroups = sqliteTable("word_groups", {
+export const wordGroups = pgTable("word_groups", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull().default("local-demo"),
   name: text("name").notNull(),
   color: text("color").notNull().default("#f28c52"),
-  isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
+  isDefault: integer("is_default").notNull().default(0),
   createdAt: text("created_at").notNull(),
 });
 
-export const userWords = sqliteTable("user_words", {
+export const userWords = pgTable("user_words", {
   userId: text("user_id").notNull(),
   word: text("word").notNull().references(() => dictionaryEntries.word, { onDelete: "cascade" }),
   note: text("note").notNull().default(""),
@@ -52,7 +52,7 @@ export const userWords = sqliteTable("user_words", {
   index("user_words_review_idx").on(table.userId, table.nextReview),
 ]);
 
-export const groupWords = sqliteTable("group_words", {
+export const groupWords = pgTable("group_words", {
   userId: text("user_id").notNull(),
   groupId: text("group_id").notNull().references(() => wordGroups.id, { onDelete: "cascade" }),
   word: text("word").notNull().references(() => dictionaryEntries.word, { onDelete: "cascade" }),
@@ -62,7 +62,7 @@ export const groupWords = sqliteTable("group_words", {
   index("group_words_group_idx").on(table.userId, table.groupId),
 ]);
 
-export const reviewSessions = sqliteTable("review_sessions", {
+export const reviewSessions = pgTable("review_sessions", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull(),
   groupId: text("group_id").notNull().references(() => wordGroups.id, { onDelete: "cascade" }),
@@ -73,7 +73,7 @@ export const reviewSessions = sqliteTable("review_sessions", {
   completedAt: text("completed_at"),
 }, (table) => [index("review_sessions_status_idx").on(table.userId, table.groupId, table.status)]);
 
-export const reviewTasks = sqliteTable("review_tasks", {
+export const reviewTasks = pgTable("review_tasks", {
   id: text("id").primaryKey(),
   sessionId: text("session_id").notNull().references(() => reviewSessions.id, { onDelete: "cascade" }),
   word: text("word").notNull().references(() => dictionaryEntries.word, { onDelete: "cascade" }),
@@ -82,24 +82,24 @@ export const reviewTasks = sqliteTable("review_tasks", {
   options: text("options").notNull(),
   correctAnswer: text("correct_answer").notNull(),
   selectedAnswer: text("selected_answer"),
-  isCorrect: integer("is_correct", { mode: "boolean" }),
+  isCorrect: integer("is_correct"),
   answeredAt: text("answered_at"),
 }, (table) => [uniqueIndex("review_tasks_position_idx").on(table.sessionId, table.position)]);
 
-export const reviewEvents = sqliteTable("review_events", {
+export const reviewEvents = pgTable("review_events", {
   id: text("id").primaryKey(),
   userId: text("user_id").notNull(),
   sessionId: text("session_id").notNull().references(() => reviewSessions.id, { onDelete: "cascade" }),
   taskId: text("task_id").notNull().references(() => reviewTasks.id, { onDelete: "cascade" }),
   word: text("word").notNull().references(() => dictionaryEntries.word, { onDelete: "cascade" }),
   questionType: text("question_type").notNull(),
-  isCorrect: integer("is_correct", { mode: "boolean" }).notNull(),
+  isCorrect: integer("is_correct").notNull(),
   answeredAt: text("answered_at").notNull(),
 });
 
 // Kept during the transition so existing local and deployed data can be migrated
 // into user_words and group_words without being discarded.
-export const legacySavedWords = sqliteTable("saved_words", {
+export const legacySavedWords = pgTable("saved_words", {
   word: text("word").notNull(),
   groupId: text("group_id").notNull().references(() => wordGroups.id, { onDelete: "cascade" }),
   addedAt: text("added_at").notNull(),
