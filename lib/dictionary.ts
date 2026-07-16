@@ -1,3 +1,5 @@
+import type { RelationDetail } from "./relations";
+
 export type WordEntry = {
   word: string;
   phonetic: string;
@@ -8,9 +10,12 @@ export type WordEntry = {
   exampleZh: string;
   synonyms: [string, string];
   antonyms: [string, string];
+  relations: RelationDetail[];
 };
 
-export const dictionary: WordEntry[] = [
+export type DictionarySeed = Omit<WordEntry, "relations">;
+
+export const dictionary: DictionarySeed[] = [
   { word: "serendipity", phonetic: "/ˌserənˈdɪpəti/", part: "n.", meaning: "意外发现美好事物的幸运", summary: "在没有刻意寻找时，偶然遇见有价值或令人愉悦之物。", example: "Finding that tiny bookstore was pure serendipity.", exampleZh: "发现那家小书店纯属意外之喜。", synonyms: ["chance", "fortune"], antonyms: ["misfortune", "design"] },
   { word: "resilient", phonetic: "/rɪˈzɪliənt/", part: "adj.", meaning: "有韧性的；能迅速恢复的", summary: "经历压力、困难或变化后，仍能恢复并继续前进。", example: "Children are often more resilient than adults expect.", exampleZh: "孩子往往比成年人想象得更有韧性。", synonyms: ["tough", "adaptable"], antonyms: ["fragile", "vulnerable"] },
   { word: "meticulous", phonetic: "/məˈtɪkjələs/", part: "adj.", meaning: "一丝不苟的；极其仔细的", summary: "对细节给予高度关注，做事精确而周到。", example: "She kept meticulous records of every experiment.", exampleZh: "她一丝不苟地记录每次实验。", synonyms: ["careful", "precise"], antonyms: ["careless", "sloppy"] },
@@ -38,4 +43,3 @@ export const dictionary: WordEntry[] = [
 ];
 
 export const wordByName = (word: string) => dictionary.find((item) => item.word === word);
-

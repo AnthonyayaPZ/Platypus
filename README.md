@@ -1,6 +1,6 @@
 # 鸭嘴兽单词（Platypus Words）
 
-鸭嘴兽单词是一个面向 Web 与后续 Android 客户端的个人单词本 Demo。当前版本包含单词检索、近反义词对比、个人笔记、分组收藏、基于间隔复习的每日任务、三类交错练习题、词库详情和键盘控制的卡片学习。
+鸭嘴兽单词是一个面向 Web 与后续 Android 客户端的个人单词本 Demo。当前版本包含单词检索、可展开的近反义词详细对比、个人笔记、分组收藏、基于间隔复习的每日任务、三类练习题、词库详情和键盘控制的卡片学习。
 
 当前项目是本地可运行的全栈 Web Demo。单词检索使用内置示例词库模拟后续 LLM 服务，收藏分组与学习进度存储在 Cloudflare D1 的本地开发实例中。
 
@@ -97,7 +97,7 @@ npm run start
 db/schema.ts
 ```
 
-主要数据按职责拆分为：公共词典 `dictionary_entries`、个人笔记与复习状态 `user_words`、分组关系 `group_words`，以及可恢复的 `review_sessions`、`review_tasks` 和答题历史 `review_events`。
+主要数据按职责拆分为：公共词典 `dictionary_entries`、近反义词差异与使用场景 `word_relations`、个人笔记与复习状态 `user_words`、分组关系 `group_words`，以及可恢复的 `review_sessions`、`review_tasks` 和答题历史 `review_events`。
 
 修改数据库结构后生成迁移：
 
@@ -161,7 +161,7 @@ public/og.png             社交分享预览图
 GET /api/search?q=resilient
 ```
 
-当前从 `lib/dictionary.ts` 中返回结果。接入正式 LLM 服务时，可以保持接口响应结构不变，只替换服务端检索实现。
+当前从服务端 D1 词典返回结果；Demo 数据由 `lib/dictionary.ts` 和 `lib/relations.ts` 初始化。接入正式 LLM 服务时，可以保持接口响应结构不变，只替换服务端检索实现。
 
 ### 应用状态
 
@@ -181,7 +181,7 @@ Content-Type: application/json
 - `createGroup`：创建单词分组。
 - `saveWord`：收藏单词到指定分组。
 - `updateNote`：保存用户针对单词的个人笔记。
-- `beginReview`：按到期日创建或恢复一组最多 10 个单词的复习会话。
+- `beginReview`：根据复习计划创建或恢复一组最多 10 个单词的复习会话；每个单词首次出现时先进行听音选词。
 - `answerTask`：保存单题结果；一个单词的三种题型完成后更新下次复习日期。
 - `cancelReview`：结束未完成的复习会话而不修改单词进度。
 
