@@ -35,7 +35,9 @@ button { color: inherit; }
 .workspace { margin-left: 252px; width: calc(100% - 252px); min-height: 100vh; transition: margin .25s ease, width .25s ease; }
 .sidebar-collapsed .sidebar { width: 78px; padding-inline: 17px; }
 .sidebar-collapsed .workspace { margin-left: 78px; width: calc(100% - 78px); }
-.sidebar-collapsed .brand-copy, .sidebar-collapsed .side-nav button b, .sidebar-collapsed .sidebar-bottom div { display: none; }
+.sidebar-collapsed .brand { width: 42px; height: 42px; gap: 0; overflow: hidden; }
+.sidebar-collapsed .brand-copy { display: none !important; }
+.sidebar-collapsed .side-nav button b, .sidebar-collapsed .sidebar-bottom div { display: none; }
 .sidebar-collapsed .brand-mark { display: none; }
 .sidebar-collapsed .brand-uploaded-icon { display: block; }
 .sidebar-collapsed .side-nav button { justify-content: center; padding-inline: 10px; position: relative; }
@@ -57,6 +59,7 @@ button { color: inherit; }
 .search-box input { border: 0; outline: 0; background: transparent; flex: 1; min-width: 80px; font-size: 16px; color: var(--ink); }
 .search-box kbd { color: #a1aaa6; font: 9px var(--font-geist-mono); border: 1px solid #dddcd3; padding: 4px 6px; border-radius: 5px; }
 .search-box button, .today-panel > button, .next-btn, .complete-card button { border: 0; background: var(--ink); color: white; border-radius: 10px; padding: 12px 18px; cursor: pointer; font-weight: 700; }
+.search-box button:disabled { opacity: .55; cursor: wait; }
 .quick-words { display: flex; align-items: center; gap: 10px; margin: 11px 3px 24px; color: var(--muted); font-size: 11px; flex-wrap: wrap; }
 .quick-words button { border: 0; background: transparent; padding: 0; color: #5c736b; cursor: pointer; border-bottom: 1px solid #aebcb7; }
 .compact-title { margin-bottom: 24px; }

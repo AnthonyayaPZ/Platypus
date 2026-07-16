@@ -43,6 +43,7 @@ export default function Home() {
   const [result, setResult] = useState<WordEntry | null>(null);
   const [toast, setToast] = useState("");
   const [loading, setLoading] = useState(true);
+  const [searching, setSearching] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const applyState = (data: StatePayload) => {
@@ -79,15 +80,22 @@ export default function Home() {
 
   const searchWord = async (word: string) => {
     const normalized = word.trim();
-    if (!normalized) return;
-    const response = await fetch(`/api/search?q=${encodeURIComponent(normalized)}`);
-    const data = await response.json() as { error?: string; entry: WordEntry };
-    if (!response.ok) {
-      setToast(data.error || "Demo 词库暂未收录，试试下方推荐词");
-      return;
+    if (!normalized || searching) return;
+    setSearching(true);
+    try {
+      const response = await fetch(`/api/search?q=${encodeURIComponent(normalized)}`);
+      const data = await response.json() as { error?: string; entry: WordEntry };
+      if (!response.ok) {
+        setToast(data.error || "暂时无法检索这个单词");
+        return;
+      }
+      setResult(data.entry);
+      setQuery(data.entry.word);
+    } catch {
+      setToast("暂时无法检索这个单词");
+    } finally {
+      setSearching(false);
     }
-    setResult(data.entry);
-    setQuery(data.entry.word);
   };
 
   const toggleSidebar = () => {
@@ -124,7 +132,7 @@ export default function Home() {
     <section className="workspace">
       <header className="mobile-header"><button className="brand" onClick={() => setView("search")}><span className="brand-mark"><span className="brand-eye" /></span><span><b>鸭嘴兽单词</b></span></button><span className="streak-pill">今日 {groups.reduce((sum, group) => sum + group.due_count, 0)} 词</span></header>
       {loading ? <LoadingState /> : view === "search" ?
-        <SearchView query={query} setQuery={setQuery} result={result} groups={groups} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} meta={result ? metaFor(result.word) : null} searchWord={searchWord} postAction={postAction} setToast={setToast} total={new Set(savedWords.map((item) => item.word)).size} due={groups.reduce((sum, group) => sum + group.due_count, 0)} setView={setView} />
+        <SearchView query={query} setQuery={setQuery} result={result} groups={groups} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} meta={result ? metaFor(result.word) : null} searching={searching} searchWord={searchWord} postAction={postAction} setToast={setToast} total={new Set(savedWords.map((item) => item.word)).size} due={groups.reduce((sum, group) => sum + group.due_count, 0)} setView={setView} />
         : view === "review" ? <ReviewView key={selectedGroup} groups={groups} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} postAction={postAction} setToast={setToast} />
         : view === "cards" ? <CardsView key={selectedGroup} groups={groups} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} words={groupWords} metaFor={metaFor} postAction={postAction} setToast={setToast} />
         : <LibraryView groups={groups} savedWords={savedWords} wordMeta={wordMeta} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} postAction={postAction} setToast={setToast} setView={setView} />}
@@ -141,8 +149,8 @@ function LoadingState() {
   return <div className="loading-state"><span className="loader-mark" /><p>正在整理今天的单词…</p></div>;
 }
 
-function SearchView({ query, setQuery, result, groups, selectedGroup, setSelectedGroup, meta, searchWord, postAction, setToast, total, due, setView }: {
-  query: string; setQuery: (value: string) => void; result: WordEntry | null; groups: Group[]; selectedGroup: string; setSelectedGroup: (value: string) => void; meta: WordMeta | null; searchWord: (word: string) => Promise<void>; postAction: (payload: Record<string, unknown>) => Promise<StatePayload>; setToast: (value: string) => void; total: number; due: number; setView: (view: View) => void;
+function SearchView({ query, setQuery, result, groups, selectedGroup, setSelectedGroup, meta, searching, searchWord, postAction, setToast, total, due, setView }: {
+  query: string; setQuery: (value: string) => void; result: WordEntry | null; groups: Group[]; selectedGroup: string; setSelectedGroup: (value: string) => void; meta: WordMeta | null; searching: boolean; searchWord: (word: string) => Promise<void>; postAction: (payload: Record<string, unknown>) => Promise<StatePayload>; setToast: (value: string) => void; total: number; due: number; setView: (view: View) => void;
 }) {
   const save = async () => {
     if (!result) return;
@@ -161,7 +169,7 @@ function SearchView({ query, setQuery, result, groups, selectedGroup, setSelecte
     <div className="page-title compact-title"><div><span className="eyebrow">EXPLORE A WORD</span><h1>今天想认识哪个词？</h1><p>查清含义，也看看它的近邻与对立面。</p></div></div>
     <div className="search-layout">
       <div className="search-main">
-        <div className="search-box"><span>⌕</span><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && searchWord(query)} placeholder="输入一个英文单词" aria-label="输入英文单词" /><kbd>ENTER</kbd><button onClick={() => searchWord(query)}>查一查</button></div>
+        <div className="search-box"><span>⌕</span><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && searchWord(query)} placeholder="输入一个英文单词" aria-label="输入英文单词" /><kbd>ENTER</kbd><button disabled={searching} onClick={() => searchWord(query)}>{searching ? "生成中…" : "查一查"}</button></div>
         <div className="quick-words"><span>试试：</span>{["resilient", "ephemeral", "pragmatic", "vivid"].map((word) => <button key={word} onClick={() => searchWord(word)}>{word}</button>)}</div>
         {result ? <article className="word-card">
           <div className="word-card-top"><WordHeading entry={result} /><div className="save-area"><select value={selectedGroup} onChange={(event) => setSelectedGroup(event.target.value)} aria-label="选择收藏分组">{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select><button onClick={save}>＋ 收藏</button></div></div>

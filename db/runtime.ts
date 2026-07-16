@@ -268,10 +268,8 @@ function relationMap(rows: Record<string, unknown>[]) {
 export async function searchDictionary(query: string) {
   await ensureDatabase();
   const db = getD1();
-  const exact = await db.prepare("SELECT * FROM dictionary_entries WHERE word = ?")
+  const row = await db.prepare("SELECT * FROM dictionary_entries WHERE word = ?")
     .bind(query).first<Record<string, unknown>>();
-  const row = exact ?? await db.prepare("SELECT * FROM dictionary_entries WHERE word LIKE ? ORDER BY length(word), word LIMIT 1")
-    .bind(`%${query}%`).first<Record<string, unknown>>();
   if (!row) return null;
   const [meta, relations] = await Promise.all([
     db.prepare(`SELECT uw.*, GROUP_CONCAT(gw.group_id) AS group_ids
@@ -282,6 +280,28 @@ export async function searchDictionary(query: string) {
       .bind(String(row.word)).all<Record<string, unknown>>(),
   ]);
   return { entry: parseEntry(row, relations.results.map(normalizeRelation)), meta: meta ? normalizeMeta(meta) : null };
+}
+
+export async function saveDictionaryEntry(entry: WordEntry, source = "llm") {
+  await ensureDatabase();
+  const db = getD1();
+  const timestamp = nowIso();
+  await db.batch([
+    db.prepare(`INSERT INTO dictionary_entries
+      (word, phonetic, part, meaning, summary, example, example_zh, synonyms, antonyms, source, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(word) DO UPDATE SET phonetic = excluded.phonetic, part = excluded.part,
+        meaning = excluded.meaning, summary = excluded.summary, example = excluded.example,
+        example_zh = excluded.example_zh, synonyms = excluded.synonyms, antonyms = excluded.antonyms,
+        source = excluded.source, updated_at = excluded.updated_at`)
+      .bind(entry.word, entry.phonetic, entry.part, entry.meaning, entry.summary, entry.example,
+        entry.exampleZh, JSON.stringify(entry.synonyms), JSON.stringify(entry.antonyms), source, timestamp, timestamp),
+    db.prepare("DELETE FROM word_relations WHERE source_word = ?").bind(entry.word),
+    ...entry.relations.map((relation, sortOrder) => db.prepare(`INSERT INTO word_relations
+      (source_word, related_word, relation_type, comparison, usage, sort_order)
+      VALUES (?, ?, ?, ?, ?, ?)`)
+      .bind(entry.word, relation.word, relation.type, relation.comparison, relation.usage, sortOrder)),
+  ]);
 }
 
 function normalizeMeta(row: Record<string, unknown>) {
