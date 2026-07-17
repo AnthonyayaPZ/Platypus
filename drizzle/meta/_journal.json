@@ -1,33 +1,19 @@
 {
   "version": "7",
-  "dialect": "sqlite",
+  "dialect": "postgresql",
   "entries": [
     {
       "idx": 0,
-      "version": "6",
-      "when": 1783672555416,
-      "tag": "0000_majestic_harrier",
+      "version": "7",
+      "when": 1784182025735,
+      "tag": "0000_round_phalanx",
       "breakpoints": true
     },
     {
       "idx": 1,
-      "version": "6",
-      "when": 1783996558093,
-      "tag": "0001_familiar_miracleman",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "6",
-      "when": 1783996588669,
-      "tag": "0002_giant_black_crow",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "6",
-      "when": 1783999302665,
-      "tag": "0003_heavy_karnak",
+      "version": "7",
+      "when": 1784188198237,
+      "tag": "0001_acoustic_agent_brand",
       "breakpoints": true
     }
   ]

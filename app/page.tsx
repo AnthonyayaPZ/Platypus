@@ -11,6 +11,7 @@ type SavedWord = { word: string; group_id: string; added_at: string; note: strin
 type ReviewTask = { id: string; word: string; question_type: "audio-word" | "word-meaning" | "meaning-word"; position: number; options: string[]; correct_answer: string; selected_answer: string | null; is_correct: boolean | null; answered_at: string | null; phonetic: string; meaning: string; summary: string };
 type ReviewSession = { id: string; group_id: string; status: "active" | "completed"; word_count: number; total_tasks: number; tasks: ReviewTask[] };
 type StatePayload = { groups: Group[]; savedWords: SavedWord[]; wordMeta: WordMeta[]; session?: ReviewSession | null; error?: string };
+type SearchSuggestion = { word: string; phonetic: string; meaning: string };
 
 const navItems: { id: View; label: string; icon: string }[] = [
   { id: "search", label: "查单词", icon: "⌕" },
@@ -38,7 +39,7 @@ export default function Home() {
   const [groups, setGroups] = useState<Group[]>([]);
   const [savedWords, setSavedWords] = useState<SavedWord[]>([]);
   const [wordMeta, setWordMeta] = useState<WordMeta[]>([]);
-  const [selectedGroup, setSelectedGroup] = useState("default");
+  const [selectedGroup, setSelectedGroup] = useState("");
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<WordEntry | null>(null);
   const [toast, setToast] = useState("");
@@ -47,9 +48,13 @@ export default function Home() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const applyState = (data: StatePayload) => {
-    setGroups(data.groups || []);
+    const nextGroups = data.groups || [];
+    setGroups(nextGroups);
     setSavedWords(data.savedWords || []);
     setWordMeta(data.wordMeta || []);
+    setSelectedGroup((current) => nextGroups.some((group) => group.id === current)
+      ? current
+      : nextGroups.find((group) => group.is_default)?.id ?? nextGroups[0]?.id ?? "");
   };
 
   useEffect(() => {
@@ -152,6 +157,72 @@ function LoadingState() {
 function SearchView({ query, setQuery, result, groups, selectedGroup, setSelectedGroup, meta, searching, searchWord, postAction, setToast, total, due, setView }: {
   query: string; setQuery: (value: string) => void; result: WordEntry | null; groups: Group[]; selectedGroup: string; setSelectedGroup: (value: string) => void; meta: WordMeta | null; searching: boolean; searchWord: (word: string) => Promise<void>; postAction: (payload: Record<string, unknown>) => Promise<StatePayload>; setToast: (value: string) => void; total: number; due: number; setView: (view: View) => void;
 }) {
+  const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([]);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [activeSuggestion, setActiveSuggestion] = useState(-1);
+  const suggestionPrefix = query.trim().toLowerCase();
+  const canShowSuggestions = /^[a-z][a-z'-]{0,47}$/.test(suggestionPrefix) && suggestionPrefix !== result?.word;
+  const showSuggestions = suggestionsOpen && canShowSuggestions && suggestions.length > 0;
+
+  useEffect(() => {
+    const prefix = query.trim().toLowerCase();
+    if (!/^[a-z][a-z'-]{0,47}$/.test(prefix) || prefix === result?.word) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/search?suggest=${encodeURIComponent(prefix)}`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) return;
+        const data = await response.json() as { suggestions?: SearchSuggestion[] };
+        setSuggestions(data.suggestions ?? []);
+        setSuggestionsOpen(Boolean(data.suggestions?.length));
+        setActiveSuggestion(-1);
+      } catch (error) {
+        if ((error as Error).name !== "AbortError") setSuggestions([]);
+      }
+    }, 180);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [query, result?.word]);
+
+  const chooseSuggestion = async (suggestion: SearchSuggestion) => {
+    setQuery(suggestion.word);
+    setSuggestionsOpen(false);
+    setActiveSuggestion(-1);
+    await searchWord(suggestion.word);
+  };
+
+  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "ArrowDown" && suggestions.length) {
+      event.preventDefault();
+      setSuggestionsOpen(true);
+      setActiveSuggestion((current) => (current + 1) % suggestions.length);
+      return;
+    }
+    if (event.key === "ArrowUp" && suggestions.length) {
+      event.preventDefault();
+      setSuggestionsOpen(true);
+      setActiveSuggestion((current) => (current - 1 + suggestions.length) % suggestions.length);
+      return;
+    }
+    if (event.key === "Escape") {
+      setSuggestionsOpen(false);
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const suggestion = showSuggestions && activeSuggestion >= 0 ? suggestions[activeSuggestion] : null;
+      if (suggestion) void chooseSuggestion(suggestion);
+      else {
+        setSuggestionsOpen(false);
+        void searchWord(query);
+      }
+    }
+  };
+
   const save = async () => {
     if (!result) return;
     try {
@@ -169,7 +240,10 @@ function SearchView({ query, setQuery, result, groups, selectedGroup, setSelecte
     <div className="page-title compact-title"><div><span className="eyebrow">EXPLORE A WORD</span><h1>今天想认识哪个词？</h1><p>查清含义，也看看它的近邻与对立面。</p></div></div>
     <div className="search-layout">
       <div className="search-main">
-        <div className="search-box"><span>⌕</span><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && searchWord(query)} placeholder="输入一个英文单词" aria-label="输入英文单词" /><kbd>ENTER</kbd><button disabled={searching} onClick={() => searchWord(query)}>{searching ? "生成中…" : "查一查"}</button></div>
+        <div className="search-combobox">
+          <div className="search-box"><span>⌕</span><input autoFocus value={query} onChange={(event) => { setQuery(event.target.value); setSuggestionsOpen(false); }} onFocus={() => setSuggestionsOpen(Boolean(suggestions.length) && canShowSuggestions)} onBlur={() => window.setTimeout(() => setSuggestionsOpen(false), 120)} onKeyDown={handleSearchKeyDown} placeholder="输入一个英文单词" aria-label="输入英文单词" role="combobox" aria-autocomplete="list" aria-expanded={showSuggestions} aria-controls="word-suggestions" aria-activedescendant={showSuggestions && activeSuggestion >= 0 ? `word-suggestion-${activeSuggestion}` : undefined} autoComplete="off" /><kbd>ENTER</kbd><button disabled={searching} onClick={() => { setSuggestionsOpen(false); void searchWord(query); }}>{searching ? "生成中…" : "查一查"}</button></div>
+          {showSuggestions && <div className="search-suggestions" id="word-suggestions" role="listbox" aria-label="匹配的单词">{suggestions.map((suggestion, index) => <button id={`word-suggestion-${index}`} role="option" aria-selected={index === activeSuggestion} className={index === activeSuggestion ? "active" : ""} key={suggestion.word} onMouseDown={(event) => event.preventDefault()} onClick={() => void chooseSuggestion(suggestion)}><span><b>{suggestion.word}</b><small>{suggestion.phonetic}</small></span><p>{suggestion.meaning}</p></button>)}</div>}
+        </div>
         <div className="quick-words"><span>试试：</span>{["resilient", "ephemeral", "pragmatic", "vivid"].map((word) => <button key={word} onClick={() => searchWord(word)}>{word}</button>)}</div>
         {result ? <article className="word-card">
           <div className="word-card-top"><WordHeading entry={result} /><div className="save-area"><select value={selectedGroup} onChange={(event) => setSelectedGroup(event.target.value)} aria-label="选择收藏分组">{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select><button onClick={save}>＋ 收藏</button></div></div>
@@ -288,10 +362,46 @@ function EmptyGroup({ groups, selectedGroup, setSelectedGroup }: { groups: Group
 function LibraryView({ groups, savedWords, wordMeta, selectedGroup, setSelectedGroup, postAction, setToast, setView }: { groups: Group[]; savedWords: SavedWord[]; wordMeta: WordMeta[]; selectedGroup: string; setSelectedGroup: (value: string) => void; postAction: (payload: Record<string, unknown>) => Promise<StatePayload>; setToast: (value: string) => void; setView: (view: View) => void }) {
   const [name, setName] = useState("");
   const [detail, setDetail] = useState<SavedWord | null>(null);
+  const [busyGroup, setBusyGroup] = useState("");
   const active = groups.find((group) => group.id === selectedGroup) || groups[0];
   const words = savedWords.filter((word) => word.group_id === active?.id);
-  const create = async () => { if (!name.trim()) return; try { await postAction({ action: "createGroup", name }); setName(""); setToast("新分组已创建"); } catch { setToast("创建失败，请重试"); } };
+  const create = async () => { if (!name.trim()) return; try { await postAction({ action: "createGroup", name }); setName(""); setToast("新分组已创建"); } catch (error) { setToast(error instanceof Error ? error.message : "创建失败，请重试"); } };
+  const setDefault = async (group: Group) => {
+    setBusyGroup(group.id);
+    try {
+      await postAction({ action: "setDefaultGroup", groupId: group.id });
+      setSelectedGroup(group.id);
+      setToast(`已将「${group.name}」设为默认词库`);
+    } catch (error) { setToast(error instanceof Error ? error.message : "设置失败"); }
+    finally { setBusyGroup(""); }
+  };
+  const removeGroup = async (group: Group) => {
+    if (!window.confirm(`确定删除词库「${group.name}」吗？\n该词库中的收藏关系和未完成复习会话将一并删除。`)) return;
+    setBusyGroup(group.id);
+    try {
+      await postAction({ action: "deleteGroup", groupId: group.id });
+      setDetail(null);
+      setToast(`已删除「${group.name}」`);
+    } catch (error) { setToast(error instanceof Error ? error.message : "删除失败"); }
+    finally { setBusyGroup(""); }
+  };
+  const removeWord = async () => {
+    if (!detail || !active) return;
+    try {
+      await postAction({ action: "removeWord", word: detail.word, groupId: active.id });
+      setDetail(null);
+      setToast(`已从「${active.name}」取消收藏`);
+    } catch (error) { setToast(error instanceof Error ? error.message : "取消收藏失败"); }
+  };
   const saveNote = async (word: string, note: string) => { await postAction({ action: "updateNote", word, note }); setToast("笔记已保存"); };
   const detailMeta = detail ? wordMeta.find((meta) => meta.word === detail.word) ?? null : null;
-  return <div className="page library-page"><div className="page-title"><div><span className="eyebrow">MY COLLECTION</span><h1>我的词库</h1><p>点击单词，查看完整信息和个人笔记。</p></div><div className="new-group"><input value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && create()} placeholder="新分组名称" /><button onClick={create}>＋ 新建分组</button></div></div><div className="group-cards">{groups.map((group) => <button key={group.id} className={selectedGroup === group.id ? "active" : ""} onClick={() => setSelectedGroup(group.id)}><i style={{ background: group.color }} /><span><b>{group.name}</b><small>{group.word_count} 个单词 · 今日复习 {group.due_count} 个</small></span><em>→</em></button>)}</div><div className="library-list"><div className="list-head"><div><h2>{active?.name}</h2><span>{words.length} WORDS</span></div><button onClick={() => setView("cards")}>用卡片学习</button></div>{words.map((saved) => <button className="word-row" key={saved.word} onClick={() => setDetail(saved)}><span className="row-sound" onClick={(event) => { event.stopPropagation(); speak(saved.word); }}>◖))</span><span className="row-word"><b>{saved.word}</b><small>{saved.entry.phonetic}</small></span><p>{saved.entry.meaning}</p><span className={saved.repetitions > 1 ? "mastered" : "learning"}>{saved.repetitions > 1 ? "已掌握" : "学习中"}</span></button>)}</div>{detail && <div className="detail-overlay" role="dialog" aria-modal="true" aria-label={`${detail.word} 详情`} onClick={() => setDetail(null)}><article className="detail-drawer" onClick={(event) => event.stopPropagation()}><button className="detail-close" onClick={() => setDetail(null)} aria-label="关闭详情">×</button><WordHeading entry={detail.entry} /><WordLearningContent key={detail.word} entry={detail.entry} meta={detailMeta} groups={groups} onSaveNote={(note) => saveNote(detail.word, note)} showMetadata /></article></div>}</div>;
+  return <div className="page library-page">
+    <div className="page-title"><div><span className="eyebrow">MY COLLECTION</span><h1>我的词库</h1><p>管理词库，或点击单词查看完整信息和个人笔记。</p></div><div className="new-group"><input value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void create()} placeholder="新词库名称" maxLength={24} /><button onClick={() => void create()}>＋ 新建词库</button></div></div>
+    <div className="group-cards">{groups.map((group) => <article key={group.id} className={`group-card ${selectedGroup === group.id ? "active" : ""}`}>
+      <button className="group-select" onClick={() => setSelectedGroup(group.id)}><i style={{ background: group.color }} /><span><b>{group.name}{Boolean(group.is_default) && <em>默认</em>}</b><small>{group.word_count} 个单词 · 今日复习 {group.due_count} 个</small></span><strong>→</strong></button>
+      <div className="group-actions">{!group.is_default && <button disabled={busyGroup === group.id} onClick={() => void setDefault(group)}>设为默认</button>}<button className="danger" disabled={busyGroup === group.id || groups.length === 1} title={groups.length === 1 ? "至少保留一个词库" : `删除 ${group.name}`} onClick={() => void removeGroup(group)}>删除</button></div>
+    </article>)}</div>
+    <div className="library-list"><div className="list-head"><div><h2>{active?.name}</h2><span>{words.length} WORDS</span></div><button onClick={() => setView("cards")}>用卡片学习</button></div>{words.map((saved) => <button className="word-row" key={saved.word} onClick={() => setDetail(saved)}><span className="row-sound" onClick={(event) => { event.stopPropagation(); speak(saved.word); }}>◖))</span><span className="row-word"><b>{saved.word}</b><small>{saved.entry.phonetic}</small></span><p>{saved.entry.meaning}</p><span className={saved.repetitions > 1 ? "mastered" : "learning"}>{saved.repetitions > 1 ? "已掌握" : "学习中"}</span></button>)}</div>
+    {detail && <div className="detail-overlay" role="dialog" aria-modal="true" aria-label={`${detail.word} 详情`} onClick={() => setDetail(null)}><article className="detail-drawer" onClick={(event) => event.stopPropagation()}><button className="detail-close" onClick={() => setDetail(null)} aria-label="关闭详情">×</button><WordHeading entry={detail.entry} /><WordLearningContent key={detail.word} entry={detail.entry} meta={detailMeta} groups={groups} onSaveNote={(note) => saveNote(detail.word, note)} showMetadata /><div className="drawer-actions"><button className="remove-word" onClick={() => void removeWord()}>从「{active?.name}」取消收藏</button><small>只移出当前词库；若还收藏在其他词库中，不影响其他收藏。</small></div></article></div>}
+  </div>;
 }

@@ -1,4 +1,3 @@
-import { env } from "cloudflare:workers";
 import type { WordEntry } from "./dictionary";
 import type { RelationDetail } from "./relations";
 
@@ -16,9 +15,8 @@ type ChatCompletion = {
 };
 
 function runtimeValue(...keys: string[]) {
-  const runtime = env as unknown as Record<string, unknown>;
   for (const key of keys) {
-    const value = runtime[key];
+    const value = process.env[key];
     if (typeof value === "string" && value.trim()) return value.trim();
   }
   return "";
