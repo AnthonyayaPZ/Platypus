@@ -1,13 +1,24 @@
-import { env } from "cloudflare:workers";
-import { drizzle } from "drizzle-orm/d1";
+import { Pool } from "pg";
+import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "./schema";
 
-export function getDb() {
-  if (!env.DB) {
-    throw new Error(
-      "Cloudflare D1 binding `DB` is unavailable. Set the `d1` field in .openai/hosting.json to `DB` or let your control plane inject the real binding values before using the database."
-    );
-  }
+const poolMax = Number.parseInt(process.env.DATABASE_POOL_MAX ?? "10", 10);
 
-  return drizzle(env.DB, { schema });
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: Number.isFinite(poolMax) && poolMax > 0 ? poolMax : 10,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+  ssl: process.env.DATABASE_SSL === "require" ? { rejectUnauthorized: false } : undefined,
+});
+
+pool.on("error", (error) => console.error("PostgreSQL connection pool error", error));
+
+export function assertDatabaseConfiguration() {
+  if (!process.env.DATABASE_URL) {
+    throw new Error("缺少 DATABASE_URL，请先配置 PostgreSQL 连接地址");
+  }
 }
+
+export const db = drizzle(pool, { schema });
+export { pool };

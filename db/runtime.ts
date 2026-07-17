@@ -1,4 +1,4 @@
-import { env } from "cloudflare:workers";
+import { assertDatabaseConfiguration, pool } from "./index";
 import { dictionary, type WordEntry } from "../lib/dictionary";
 import { relationDetails, type RelationDetail } from "../lib/relations";
 
@@ -45,11 +45,28 @@ function datePlusDays(days: number) {
   }).format(date);
 }
 
-export function getD1() {
-  if (!env.DB) throw new Error("Cloudflare D1 binding `DB` is unavailable.");
-  return env.DB;
+// ---------------------------------------------------------------------------
+// Transaction helper – runs an array of queries atomically
+// ---------------------------------------------------------------------------
+async function batch(queries: { text: string; values: unknown[] }[]) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (const q of queries) {
+      await client.query(q.text, q.values);
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
+// ---------------------------------------------------------------------------
+// Lazy initialisation – run once on first API call
+// ---------------------------------------------------------------------------
 let databaseReady: Promise<void> | null = null;
 
 export function ensureDatabase() {
@@ -63,175 +80,109 @@ export function ensureDatabase() {
 }
 
 async function initializeDatabase() {
-  const db = getD1();
-  await db.batch([
-    db.prepare(`CREATE TABLE IF NOT EXISTS dictionary_entries (
-      word TEXT PRIMARY KEY,
-      phonetic TEXT NOT NULL,
-      part TEXT NOT NULL,
-      meaning TEXT NOT NULL,
-      summary TEXT NOT NULL,
-      example TEXT NOT NULL,
-      example_zh TEXT NOT NULL,
-      synonyms TEXT NOT NULL,
-      antonyms TEXT NOT NULL,
-      source TEXT NOT NULL DEFAULT 'demo-dictionary',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    )`),
-    db.prepare(`CREATE TABLE IF NOT EXISTS word_relations (
-      source_word TEXT NOT NULL,
-      related_word TEXT NOT NULL,
-      relation_type TEXT NOT NULL,
-      comparison TEXT NOT NULL,
-      usage TEXT NOT NULL,
-      sort_order INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (source_word, related_word, relation_type),
-      FOREIGN KEY (source_word) REFERENCES dictionary_entries(word) ON DELETE CASCADE
-    )`),
-    db.prepare(`CREATE TABLE IF NOT EXISTS word_groups (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL DEFAULT 'local-demo',
-      name TEXT NOT NULL,
-      color TEXT NOT NULL DEFAULT '#f28c52',
-      is_default INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL
-    )`),
-    db.prepare(`CREATE TABLE IF NOT EXISTS saved_words (
-      word TEXT NOT NULL,
-      group_id TEXT NOT NULL,
-      added_at TEXT NOT NULL,
-      ease INTEGER NOT NULL DEFAULT 250,
-      interval_days INTEGER NOT NULL DEFAULT 0,
-      repetitions INTEGER NOT NULL DEFAULT 0,
-      next_review TEXT NOT NULL,
-      last_reviewed TEXT,
-      PRIMARY KEY (word, group_id),
-      FOREIGN KEY (group_id) REFERENCES word_groups(id) ON DELETE CASCADE
-    )`),
-    db.prepare(`CREATE TABLE IF NOT EXISTS user_words (
-      user_id TEXT NOT NULL,
-      word TEXT NOT NULL,
-      note TEXT NOT NULL DEFAULT '',
-      first_saved_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      ease INTEGER NOT NULL DEFAULT 250,
-      interval_days INTEGER NOT NULL DEFAULT 0,
-      repetitions INTEGER NOT NULL DEFAULT 0,
-      next_review TEXT NOT NULL,
-      last_reviewed TEXT,
-      PRIMARY KEY (user_id, word),
-      FOREIGN KEY (word) REFERENCES dictionary_entries(word) ON DELETE CASCADE
-    )`),
-    db.prepare(`CREATE TABLE IF NOT EXISTS group_words (
-      user_id TEXT NOT NULL,
-      group_id TEXT NOT NULL,
-      word TEXT NOT NULL,
-      added_at TEXT NOT NULL,
-      PRIMARY KEY (user_id, group_id, word),
-      FOREIGN KEY (group_id) REFERENCES word_groups(id) ON DELETE CASCADE,
-      FOREIGN KEY (word) REFERENCES dictionary_entries(word) ON DELETE CASCADE
-    )`),
-    db.prepare(`CREATE TABLE IF NOT EXISTS review_sessions (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      group_id TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'active',
-      word_count INTEGER NOT NULL,
-      total_tasks INTEGER NOT NULL,
-      created_at TEXT NOT NULL,
-      completed_at TEXT,
-      FOREIGN KEY (group_id) REFERENCES word_groups(id) ON DELETE CASCADE
-    )`),
-    db.prepare(`CREATE TABLE IF NOT EXISTS review_tasks (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL,
-      word TEXT NOT NULL,
-      question_type TEXT NOT NULL,
-      position INTEGER NOT NULL,
-      options TEXT NOT NULL,
-      correct_answer TEXT NOT NULL,
-      selected_answer TEXT,
-      is_correct INTEGER,
-      answered_at TEXT,
-      FOREIGN KEY (session_id) REFERENCES review_sessions(id) ON DELETE CASCADE,
-      FOREIGN KEY (word) REFERENCES dictionary_entries(word) ON DELETE CASCADE
-    )`),
-    db.prepare(`CREATE TABLE IF NOT EXISTS review_events (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      session_id TEXT NOT NULL,
-      task_id TEXT NOT NULL,
-      word TEXT NOT NULL,
-      question_type TEXT NOT NULL,
-      is_correct INTEGER NOT NULL,
-      answered_at TEXT NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES review_sessions(id) ON DELETE CASCADE,
-      FOREIGN KEY (task_id) REFERENCES review_tasks(id) ON DELETE CASCADE,
-      FOREIGN KEY (word) REFERENCES dictionary_entries(word) ON DELETE CASCADE
-    )`),
-    db.prepare("CREATE INDEX IF NOT EXISTS group_words_group_idx ON group_words(user_id, group_id)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS word_relations_source_idx ON word_relations(source_word, sort_order)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS user_words_review_idx ON user_words(user_id, next_review)"),
-    db.prepare("CREATE INDEX IF NOT EXISTS review_sessions_status_idx ON review_sessions(user_id, group_id, status)"),
-    db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS review_tasks_position_idx ON review_tasks(session_id, position)"),
-  ]);
-
-  const columns = await db.prepare("PRAGMA table_info(word_groups)").all<{ name: string }>();
-  if (!columns.results.some((column) => column.name === "user_id")) {
-    await db.prepare("ALTER TABLE word_groups ADD COLUMN user_id TEXT NOT NULL DEFAULT 'local-demo'").run();
-  }
-
+  assertDatabaseConfiguration();
+  // seed dictionary entries from the demo word list
   const timestamp = nowIso();
-  await db.batch(dictionary.map((entry) => db.prepare(`INSERT INTO dictionary_entries
-    (word, phonetic, part, meaning, summary, example, example_zh, synonyms, antonyms, source, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'demo-dictionary', ?, ?)
-    ON CONFLICT(word) DO UPDATE SET phonetic = excluded.phonetic, part = excluded.part,
-      meaning = excluded.meaning, summary = excluded.summary, example = excluded.example,
-      example_zh = excluded.example_zh, synonyms = excluded.synonyms, antonyms = excluded.antonyms,
-      updated_at = excluded.updated_at`)
-    .bind(entry.word, entry.phonetic, entry.part, entry.meaning, entry.summary, entry.example,
-      entry.exampleZh, JSON.stringify(entry.synonyms), JSON.stringify(entry.antonyms), timestamp, timestamp)));
-  await db.batch(Object.entries(relationDetails).flatMap(([sourceWord, relations]) => relations.map((relation, sortOrder) =>
-    db.prepare(`INSERT INTO word_relations
-      (source_word, related_word, relation_type, comparison, usage, sort_order)
-      VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(source_word, related_word, relation_type)
-      DO UPDATE SET comparison = excluded.comparison, usage = excluded.usage, sort_order = excluded.sort_order`)
-      .bind(sourceWord, relation.word, relation.type, relation.comparison, relation.usage, sortOrder))));
+  const dictInsert = dictionary.map((entry) => ({
+    text: `INSERT INTO dictionary_entries
+      (word, phonetic, part, meaning, summary, example, example_zh, synonyms, antonyms, source, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'demo-dictionary', $10, $11)
+      ON CONFLICT(word) DO UPDATE SET
+        phonetic = EXCLUDED.phonetic, part = EXCLUDED.part,
+        meaning = EXCLUDED.meaning, summary = EXCLUDED.summary,
+        example = EXCLUDED.example, example_zh = EXCLUDED.example_zh,
+        synonyms = EXCLUDED.synonyms, antonyms = EXCLUDED.antonyms,
+        updated_at = EXCLUDED.updated_at`,
+    values: [
+      entry.word, entry.phonetic, entry.part, entry.meaning,
+      entry.summary, entry.example, entry.exampleZh,
+      JSON.stringify(entry.synonyms), JSON.stringify(entry.antonyms),
+      timestamp, timestamp,
+    ],
+  }));
+  await batch(dictInsert);
 
-  const groupCount = await db.prepare("SELECT COUNT(*) AS count FROM word_groups WHERE user_id = ?")
-    .bind(DEMO_USER_ID).first<{ count: number }>();
-  if (!groupCount?.count) {
-    await db.batch([
-      db.prepare("INSERT INTO word_groups (id, user_id, name, color, is_default, created_at) VALUES (?, ?, ?, ?, 1, ?)")
-        .bind("default", DEMO_USER_ID, "默认收藏", "#f28c52", timestamp),
-      db.prepare("INSERT INTO word_groups (id, user_id, name, color, is_default, created_at) VALUES (?, ?, ?, ?, 0, ?)")
-        .bind("cet6", DEMO_USER_ID, "CET-6 冲刺", "#2f6f62", timestamp),
-      db.prepare("INSERT INTO word_groups (id, user_id, name, color, is_default, created_at) VALUES (?, ?, ?, ?, 0, ?)")
-        .bind("work", DEMO_USER_ID, "工作表达", "#6f67a8", timestamp),
+  // seed word relations
+  const relInsert = Object.entries(relationDetails).flatMap(
+    ([sourceWord, relations]) =>
+      relations.map((relation, sortOrder) => ({
+        text: `INSERT INTO word_relations
+          (source_word, related_word, relation_type, comparison, usage, sort_order)
+          VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT(source_word, related_word, relation_type)
+          DO UPDATE SET comparison = EXCLUDED.comparison, usage = EXCLUDED.usage, sort_order = EXCLUDED.sort_order`,
+        values: [
+          sourceWord, relation.word, relation.type,
+          relation.comparison, relation.usage, sortOrder,
+        ],
+      })),
+  );
+  if (relInsert.length > 0) await batch(relInsert);
+
+  // create default groups if none exist
+  const { rows: groupRows } = await pool.query(
+    "SELECT COUNT(*)::int AS count FROM word_groups WHERE user_id = $1",
+    [DEMO_USER_ID],
+  );
+  if (!groupRows[0]?.count) {
+    await batch([
+      {
+        text: "INSERT INTO word_groups (id, user_id, name, color, is_default, created_at) VALUES ($1, $2, $3, $4, 1, $5)",
+        values: ["default", DEMO_USER_ID, "默认收藏", "#f28c52", timestamp],
+      },
+      {
+        text: "INSERT INTO word_groups (id, user_id, name, color, is_default, created_at) VALUES ($1, $2, $3, $4, 0, $5)",
+        values: ["cet6", DEMO_USER_ID, "CET-6 冲刺", "#2f6f62", timestamp],
+      },
+      {
+        text: "INSERT INTO word_groups (id, user_id, name, color, is_default, created_at) VALUES ($1, $2, $3, $4, 0, $5)",
+        values: ["work", DEMO_USER_ID, "工作表达", "#6f67a8", timestamp],
+      },
     ]);
   }
 
-  await db.prepare(`INSERT OR IGNORE INTO user_words
-    (user_id, word, note, first_saved_at, updated_at, ease, interval_days, repetitions, next_review, last_reviewed)
-    SELECT ?, word, '', MIN(added_at), ?, MAX(ease), MAX(interval_days), MAX(repetitions), MIN(next_review), MAX(last_reviewed)
-    FROM saved_words GROUP BY word`).bind(DEMO_USER_ID, timestamp).run();
-  await db.prepare(`INSERT OR IGNORE INTO group_words (user_id, group_id, word, added_at)
-    SELECT ?, group_id, word, added_at FROM saved_words`).bind(DEMO_USER_ID).run();
+  // migrate legacy saved_words → user_words + group_words
+  await pool.query(
+    `INSERT INTO user_words
+      (user_id, word, note, first_saved_at, updated_at, ease, interval_days, repetitions, next_review, last_reviewed)
+      SELECT $1, word, '', MIN(added_at), $2,
+        MAX(ease), MAX(interval_days), MAX(repetitions), MIN(next_review), MAX(last_reviewed)
+      FROM saved_words GROUP BY word
+      ON CONFLICT DO NOTHING`,
+    [DEMO_USER_ID, timestamp],
+  );
+  await pool.query(
+    `INSERT INTO group_words (user_id, group_id, word, added_at)
+      SELECT $1, group_id, word, added_at FROM saved_words
+      ON CONFLICT DO NOTHING`,
+    [DEMO_USER_ID],
+  );
 
-  const membershipCount = await db.prepare("SELECT COUNT(*) AS count FROM group_words WHERE user_id = ?")
-    .bind(DEMO_USER_ID).first<{ count: number }>();
-  if (!membershipCount?.count) {
-    await db.batch(dictionary.slice(0, 20).flatMap((entry) => [
-      db.prepare(`INSERT OR IGNORE INTO user_words
-        (user_id, word, note, first_saved_at, updated_at, next_review) VALUES (?, ?, '', ?, ?, ?)`)
-        .bind(DEMO_USER_ID, entry.word, timestamp, timestamp, today()),
-      db.prepare("INSERT OR IGNORE INTO group_words (user_id, group_id, word, added_at) VALUES (?, 'default', ?, ?)")
-        .bind(DEMO_USER_ID, entry.word, timestamp),
-    ]));
+  // seed default group with first 20 demo words if still empty
+  const { rows: membershipRows } = await pool.query(
+    "SELECT COUNT(*)::int AS count FROM group_words WHERE user_id = $1",
+    [DEMO_USER_ID],
+  );
+  if (!membershipRows[0]?.count) {
+    const seedBatch = dictionary.slice(0, 20).flatMap((entry) => [
+      {
+        text: `INSERT INTO user_words
+          (user_id, word, note, first_saved_at, updated_at, next_review)
+          VALUES ($1, $2, '', $3, $4, $5) ON CONFLICT DO NOTHING`,
+        values: [DEMO_USER_ID, entry.word, timestamp, timestamp, today()],
+      },
+      {
+        text: "INSERT INTO group_words (user_id, group_id, word, added_at) VALUES ($1, 'default', $2, $3) ON CONFLICT DO NOTHING",
+        values: [DEMO_USER_ID, entry.word, timestamp],
+      },
+    ]);
+    await batch(seedBatch);
   }
 }
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 function parseEntry(row: Record<string, unknown>, relations: RelationDetail[] = []): WordEntry {
   return {
     word: String(row.word),
@@ -265,45 +216,6 @@ function relationMap(rows: Record<string, unknown>[]) {
   return map;
 }
 
-export async function searchDictionary(query: string) {
-  await ensureDatabase();
-  const db = getD1();
-  const row = await db.prepare("SELECT * FROM dictionary_entries WHERE word = ?")
-    .bind(query).first<Record<string, unknown>>();
-  if (!row) return null;
-  const [meta, relations] = await Promise.all([
-    db.prepare(`SELECT uw.*, GROUP_CONCAT(gw.group_id) AS group_ids
-      FROM user_words uw LEFT JOIN group_words gw ON gw.user_id = uw.user_id AND gw.word = uw.word
-      WHERE uw.user_id = ? AND uw.word = ? GROUP BY uw.user_id, uw.word`)
-      .bind(DEMO_USER_ID, String(row.word)).first<Record<string, unknown>>(),
-    db.prepare(`SELECT * FROM word_relations WHERE source_word = ? ORDER BY sort_order`)
-      .bind(String(row.word)).all<Record<string, unknown>>(),
-  ]);
-  return { entry: parseEntry(row, relations.results.map(normalizeRelation)), meta: meta ? normalizeMeta(meta) : null };
-}
-
-export async function saveDictionaryEntry(entry: WordEntry, source = "llm") {
-  await ensureDatabase();
-  const db = getD1();
-  const timestamp = nowIso();
-  await db.batch([
-    db.prepare(`INSERT INTO dictionary_entries
-      (word, phonetic, part, meaning, summary, example, example_zh, synonyms, antonyms, source, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(word) DO UPDATE SET phonetic = excluded.phonetic, part = excluded.part,
-        meaning = excluded.meaning, summary = excluded.summary, example = excluded.example,
-        example_zh = excluded.example_zh, synonyms = excluded.synonyms, antonyms = excluded.antonyms,
-        source = excluded.source, updated_at = excluded.updated_at`)
-      .bind(entry.word, entry.phonetic, entry.part, entry.meaning, entry.summary, entry.example,
-        entry.exampleZh, JSON.stringify(entry.synonyms), JSON.stringify(entry.antonyms), source, timestamp, timestamp),
-    db.prepare("DELETE FROM word_relations WHERE source_word = ?").bind(entry.word),
-    ...entry.relations.map((relation, sortOrder) => db.prepare(`INSERT INTO word_relations
-      (source_word, related_word, relation_type, comparison, usage, sort_order)
-      VALUES (?, ?, ?, ?, ?, ?)`)
-      .bind(entry.word, relation.word, relation.type, relation.comparison, relation.usage, sortOrder)),
-  ]);
-}
-
 function normalizeMeta(row: Record<string, unknown>) {
   return {
     word: String(row.word),
@@ -317,37 +229,136 @@ function normalizeMeta(row: Record<string, unknown>) {
   };
 }
 
+function shuffle<T>(items: T[]) {
+  const result = [...items];
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const target = Math.floor(Math.random() * (index + 1));
+    [result[index], result[target]] = [result[target], result[index]];
+  }
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Dictionary search
+// ---------------------------------------------------------------------------
+export async function searchDictionary(query: string) {
+  await ensureDatabase();
+  const { rows: entryRows } = await pool.query(
+    "SELECT * FROM dictionary_entries WHERE word = $1",
+    [query],
+  );
+  if (!entryRows.length) return null;
+  const row = entryRows[0] as Record<string, unknown>;
+
+  const [metaRow, relResult] = await Promise.all([
+    pool.query(
+      `SELECT uw.*, COALESCE(STRING_AGG(gw.group_id, ',' ORDER BY gw.group_id), '') AS group_ids
+      FROM user_words uw
+      LEFT JOIN group_words gw ON gw.user_id = uw.user_id AND gw.word = uw.word
+      WHERE uw.user_id = $1 AND uw.word = $2
+      GROUP BY uw.user_id, uw.word`,
+      [DEMO_USER_ID, String(row.word)],
+    ),
+    pool.query(
+      "SELECT * FROM word_relations WHERE source_word = $1 ORDER BY sort_order",
+      [String(row.word)],
+    ),
+  ]);
+
+  return {
+    entry: parseEntry(row, (relResult.rows as Record<string, unknown>[]).map(normalizeRelation)),
+    meta: metaRow.rows[0] ? normalizeMeta(metaRow.rows[0] as Record<string, unknown>) : null,
+  };
+}
+
+export async function saveDictionaryEntry(entry: WordEntry, source = "llm") {
+  await ensureDatabase();
+  const timestamp = nowIso();
+
+  const queries: { text: string; values: unknown[] }[] = [
+    {
+      text: `INSERT INTO dictionary_entries
+        (word, phonetic, part, meaning, summary, example, example_zh, synonyms, antonyms, source, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        ON CONFLICT(word) DO UPDATE SET
+          phonetic = EXCLUDED.phonetic, part = EXCLUDED.part,
+          meaning = EXCLUDED.meaning, summary = EXCLUDED.summary,
+          example = EXCLUDED.example, example_zh = EXCLUDED.example_zh,
+          synonyms = EXCLUDED.synonyms, antonyms = EXCLUDED.antonyms,
+          source = EXCLUDED.source, updated_at = EXCLUDED.updated_at`,
+      values: [
+        entry.word, entry.phonetic, entry.part, entry.meaning,
+        entry.summary, entry.example, entry.exampleZh,
+        JSON.stringify(entry.synonyms), JSON.stringify(entry.antonyms),
+        source, timestamp, timestamp,
+      ],
+    },
+    {
+      text: "DELETE FROM word_relations WHERE source_word = $1",
+      values: [entry.word],
+    },
+    ...entry.relations.map((relation, sortOrder) => ({
+      text: `INSERT INTO word_relations
+        (source_word, related_word, relation_type, comparison, usage, sort_order)
+        VALUES ($1, $2, $3, $4, $5, $6)`,
+      values: [entry.word, relation.word, relation.type, relation.comparison, relation.usage, sortOrder],
+    })),
+  ];
+  await batch(queries);
+}
+
+// ---------------------------------------------------------------------------
+// State / load
+// ---------------------------------------------------------------------------
 export async function loadState() {
   await ensureDatabase();
-  const db = getD1();
-  const [groups, memberships, metas, relations] = await Promise.all([
-    db.prepare(`SELECT g.*, COUNT(gw.word) AS word_count,
-      SUM(CASE WHEN uw.next_review <= ? THEN 1 ELSE 0 END) AS due_count
+
+  const [groupsRes, membershipsRes, metasRes, relationsRes] = await Promise.all([
+    pool.query(
+      `SELECT g.*, COUNT(gw.word)::int AS word_count,
+        COALESCE(SUM(CASE WHEN uw.next_review <= $1 THEN 1 ELSE 0 END), 0)::int AS due_count
       FROM word_groups g
       LEFT JOIN group_words gw ON gw.group_id = g.id AND gw.user_id = g.user_id
       LEFT JOIN user_words uw ON uw.user_id = gw.user_id AND uw.word = gw.word
-      WHERE g.user_id = ? GROUP BY g.id ORDER BY g.is_default DESC, g.created_at ASC`)
-      .bind(today(), DEMO_USER_ID).all<Record<string, unknown>>(),
-    db.prepare(`SELECT gw.word, gw.group_id, gw.added_at, uw.note, uw.first_saved_at,
-      uw.repetitions, uw.next_review, uw.last_reviewed,
-      d.phonetic, d.part, d.meaning, d.summary, d.example, d.example_zh, d.synonyms, d.antonyms
+      WHERE g.user_id = $2
+      GROUP BY g.id
+      ORDER BY g.is_default DESC, g.created_at ASC`,
+      [today(), DEMO_USER_ID],
+    ),
+    pool.query(
+      `SELECT gw.word, gw.group_id, gw.added_at, uw.note, uw.first_saved_at,
+        uw.repetitions, uw.next_review, uw.last_reviewed,
+        d.phonetic, d.part, d.meaning, d.summary, d.example, d.example_zh, d.synonyms, d.antonyms
       FROM group_words gw
       JOIN user_words uw ON uw.user_id = gw.user_id AND uw.word = gw.word
       JOIN dictionary_entries d ON d.word = gw.word
-      WHERE gw.user_id = ? ORDER BY gw.added_at DESC, gw.word ASC`)
-      .bind(DEMO_USER_ID).all<Record<string, unknown>>(),
-    db.prepare(`SELECT uw.*, GROUP_CONCAT(gw.group_id) AS group_ids
-      FROM user_words uw LEFT JOIN group_words gw ON gw.user_id = uw.user_id AND gw.word = uw.word
-      WHERE uw.user_id = ? GROUP BY uw.user_id, uw.word ORDER BY uw.first_saved_at DESC`)
-      .bind(DEMO_USER_ID).all<Record<string, unknown>>(),
-    db.prepare("SELECT * FROM word_relations ORDER BY source_word, sort_order").all<Record<string, unknown>>(),
+      WHERE gw.user_id = $1
+      ORDER BY gw.added_at DESC, gw.word ASC`,
+      [DEMO_USER_ID],
+    ),
+    pool.query(
+      `SELECT uw.*, COALESCE(STRING_AGG(gw.group_id, ',' ORDER BY gw.group_id), '') AS group_ids
+      FROM user_words uw
+      LEFT JOIN group_words gw ON gw.user_id = uw.user_id AND gw.word = uw.word
+      WHERE uw.user_id = $1
+      GROUP BY uw.user_id, uw.word
+      ORDER BY uw.first_saved_at DESC`,
+      [DEMO_USER_ID],
+    ),
+    pool.query(
+      "SELECT * FROM word_relations ORDER BY source_word, sort_order",
+    ),
   ]);
 
-  const relationsByWord = relationMap(relations.results);
+  const relationsByWord = relationMap(relationsRes.rows as Record<string, unknown>[]);
 
   return {
-    groups: groups.results.map((group) => ({ ...group, word_count: Number(group.word_count), due_count: Number(group.due_count) })),
-    savedWords: memberships.results.map((row) => ({
+    groups: groupsRes.rows.map((g: Record<string, unknown>) => ({
+      ...g,
+      word_count: Number(g.word_count),
+      due_count: Number(g.due_count),
+    })),
+    savedWords: membershipsRes.rows.map((row: Record<string, unknown>) => ({
       word: String(row.word),
       group_id: String(row.group_id),
       added_at: String(row.added_at),
@@ -358,40 +369,35 @@ export async function loadState() {
       last_reviewed: row.last_reviewed ? String(row.last_reviewed) : null,
       entry: parseEntry(row, relationsByWord.get(String(row.word)) ?? []),
     })),
-    wordMeta: metas.results.map(normalizeMeta),
+    wordMeta: metasRes.rows.map((row: Record<string, unknown>) => normalizeMeta(row)),
   };
 }
 
-function shuffle<T>(items: T[]) {
-  const result = [...items];
-  for (let index = result.length - 1; index > 0; index -= 1) {
-    const target = Math.floor(Math.random() * (index + 1));
-    [result[index], result[target]] = [result[target], result[index]];
-  }
-  return result;
-}
-
-function taskOptions(type: QuestionType, entry: WordEntry, entries: WordEntry[]) {
-  const useMeaning = type === "word-meaning";
-  const correct = useMeaning ? entry.meaning : entry.word;
-  const distractors = shuffle(entries.filter((item) => item.word !== entry.word))
-    .slice(0, 3).map((item) => useMeaning ? item.meaning : item.word);
-  return { correct, options: shuffle([correct, ...distractors]) };
-}
-
+// ---------------------------------------------------------------------------
+// Review session
+// ---------------------------------------------------------------------------
 export async function getReviewSession(sessionId: string) {
-  const db = getD1();
-  const session = await db.prepare("SELECT * FROM review_sessions WHERE id = ? AND user_id = ?")
-    .bind(sessionId, DEMO_USER_ID).first<Record<string, unknown>>();
-  if (!session) return null;
-  const tasks = await db.prepare(`SELECT t.*, d.phonetic, d.meaning, d.summary
-    FROM review_tasks t JOIN dictionary_entries d ON d.word = t.word
-    WHERE t.session_id = ? ORDER BY t.position`).bind(sessionId).all<ReviewTaskRow>();
+  const { rows: sessionRows } = await pool.query(
+    "SELECT * FROM review_sessions WHERE id = $1 AND user_id = $2",
+    [sessionId, DEMO_USER_ID],
+  );
+  if (!sessionRows.length) return null;
+  const session = sessionRows[0] as Record<string, unknown>;
+
+  const { rows: taskRows } = await pool.query(
+    `SELECT t.*, d.phonetic, d.meaning, d.summary
+    FROM review_tasks t
+    JOIN dictionary_entries d ON d.word = t.word
+    WHERE t.session_id = $1
+    ORDER BY t.position`,
+    [sessionId],
+  );
+
   return {
     ...session,
     word_count: Number(session.word_count),
     total_tasks: Number(session.total_tasks),
-    tasks: tasks.results.map((task) => ({
+    tasks: (taskRows as ReviewTaskRow[]).map((task) => ({
       ...task,
       position: Number(task.position),
       options: JSON.parse(task.options) as string[],
@@ -400,35 +406,61 @@ export async function getReviewSession(sessionId: string) {
   };
 }
 
+function taskOptions(type: QuestionType, entry: WordEntry, entries: WordEntry[]) {
+  const useMeaning = type === "word-meaning";
+  const correct = useMeaning ? entry.meaning : entry.word;
+  const distractors = shuffle(entries.filter((item) => item.word !== entry.word))
+    .slice(0, 3).map((item) => (useMeaning ? item.meaning : item.word));
+  return { correct, options: shuffle([correct, ...distractors]) };
+}
+
 export async function beginReviewSession(groupId: string) {
   await ensureDatabase();
-  const db = getD1();
-  const group = await db.prepare("SELECT id FROM word_groups WHERE id = ? AND user_id = ?")
-    .bind(groupId, DEMO_USER_ID).first();
-  if (!group) throw new Error("单词分组不存在");
+  const { rows: groupRows } = await pool.query(
+    "SELECT id FROM word_groups WHERE id = $1 AND user_id = $2",
+    [groupId, DEMO_USER_ID],
+  );
+  if (!groupRows.length) throw new Error("单词分组不存在");
 
-  const active = await db.prepare(`SELECT id FROM review_sessions
-    WHERE user_id = ? AND group_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1`)
-    .bind(DEMO_USER_ID, groupId).first<{ id: string }>();
-  if (active) return getReviewSession(active.id);
+  const { rows: activeRows } = await pool.query(
+    `SELECT id FROM review_sessions
+    WHERE user_id = $1 AND group_id = $2 AND status = 'active'
+    ORDER BY created_at DESC LIMIT 1`,
+    [DEMO_USER_ID, groupId],
+  );
+  if (activeRows.length) return getReviewSession(activeRows[0].id);
 
-  const due = await db.prepare(`SELECT d.* FROM group_words gw
+  const { rows: dueRows } = await pool.query(
+    `SELECT d.* FROM group_words gw
     JOIN user_words uw ON uw.user_id = gw.user_id AND uw.word = gw.word
     JOIN dictionary_entries d ON d.word = gw.word
-    WHERE gw.user_id = ? AND gw.group_id = ? AND uw.next_review <= ?
-    ORDER BY uw.next_review ASC, uw.first_saved_at ASC LIMIT 10`)
-    .bind(DEMO_USER_ID, groupId, today()).all<Record<string, unknown>>();
-  if (!due.results.length) return null;
+    WHERE gw.user_id = $1 AND gw.group_id = $2 AND uw.next_review <= $3
+    ORDER BY uw.next_review ASC, uw.first_saved_at ASC LIMIT 10`,
+    [DEMO_USER_ID, groupId, today()],
+  );
+  if (!dueRows.length) return null;
 
-  const entries = due.results.map((row) => parseEntry(row));
-  const allEntriesResult = await db.prepare("SELECT * FROM dictionary_entries ORDER BY word").all<Record<string, unknown>>();
-  const allEntries = allEntriesResult.results.map((row) => parseEntry(row));
+  const entries: WordEntry[] = dueRows.map((row: Record<string, unknown>) => parseEntry(row));
+  const { rows: distractorRows } = await pool.query(
+    `SELECT * FROM dictionary_entries
+    WHERE NOT (word = ANY($1::text[]))
+    ORDER BY word
+    LIMIT 50`,
+    [entries.map((entry) => entry.word)],
+  );
+  const allEntries: WordEntry[] = [
+    ...entries,
+    ...distractorRows.map((row: Record<string, unknown>) => parseEntry(row)),
+  ];
+
   const tasks: { word: string; type: QuestionType; options: string[]; correct: string }[] = [];
   for (let round = 0; round < 3; round += 1) {
     const roundTasks = shuffle(entries.map((entry, index) => {
       const secondType: QuestionType = index % 2 === 0 ? "word-meaning" : "meaning-word";
-      const type: QuestionType = round === 0 ? "audio-word" : round === 1
-        ? secondType : secondType === "word-meaning" ? "meaning-word" : "word-meaning";
+      const type: QuestionType =
+        round === 0 ? "audio-word"
+        : round === 1 ? secondType
+        : secondType === "word-meaning" ? "meaning-word" : "word-meaning";
       return { word: entry.word, type, ...taskOptions(type, entry, allEntries) };
     }));
     if (tasks.length && roundTasks[0]?.word === tasks.at(-1)?.word && roundTasks.length > 1) {
@@ -439,75 +471,135 @@ export async function beginReviewSession(groupId: string) {
 
   const sessionId = `session-${crypto.randomUUID()}`;
   const timestamp = nowIso();
-  await db.prepare(`INSERT INTO review_sessions
-    (id, user_id, group_id, status, word_count, total_tasks, created_at)
-    VALUES (?, ?, ?, 'active', ?, ?, ?)`)
-    .bind(sessionId, DEMO_USER_ID, groupId, entries.length, tasks.length, timestamp).run();
-  await db.batch(tasks.map((task, position) => db.prepare(`INSERT INTO review_tasks
-    (id, session_id, word, question_type, position, options, correct_answer)
-    VALUES (?, ?, ?, ?, ?, ?, ?)`)
-    .bind(`task-${crypto.randomUUID()}`, sessionId, task.word, task.type, position,
-      JSON.stringify(task.options), task.correct)));
+
+  await batch([
+    {
+      text: `INSERT INTO review_sessions
+        (id, user_id, group_id, status, word_count, total_tasks, created_at)
+        VALUES ($1, $2, $3, 'active', $4, $5, $6)`,
+      values: [sessionId, DEMO_USER_ID, groupId, entries.length, tasks.length, timestamp],
+    },
+    ...tasks.map((task, position) => ({
+      text: `INSERT INTO review_tasks
+        (id, session_id, word, question_type, position, options, correct_answer)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      values: [
+        `task-${crypto.randomUUID()}`, sessionId, task.word, task.type,
+        position, JSON.stringify(task.options), task.correct,
+      ],
+    })),
+  ]);
+
   return getReviewSession(sessionId);
 }
 
 export async function answerReviewTask(sessionId: string, taskId: string, selectedAnswer: string) {
   await ensureDatabase();
-  const db = getD1();
-  const task = await db.prepare(`SELECT t.* FROM review_tasks t
-    JOIN review_sessions s ON s.id = t.session_id
-    WHERE t.id = ? AND t.session_id = ? AND s.user_id = ? AND s.status = 'active'`)
-    .bind(taskId, sessionId, DEMO_USER_ID).first<ReviewTaskRow>();
-  if (!task) throw new Error("复习题目不存在或会话已经结束");
-  if (task.answered_at) return { session: await getReviewSession(sessionId), state: await loadState() };
-
   const timestamp = nowIso();
-  const isCorrect = selectedAnswer === task.correct_answer;
-  await db.batch([
-    db.prepare(`UPDATE review_tasks SET selected_answer = ?, is_correct = ?, answered_at = ?
-      WHERE id = ? AND answered_at IS NULL`).bind(selectedAnswer, isCorrect ? 1 : 0, timestamp, taskId),
-    db.prepare(`INSERT INTO review_events
-      (id, user_id, session_id, task_id, word, question_type, is_correct, answered_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(`event-${crypto.randomUUID()}`, DEMO_USER_ID, sessionId, taskId, task.word,
-        task.question_type, isCorrect ? 1 : 0, timestamp),
-  ]);
-
-  const wordScore = await db.prepare(`SELECT COUNT(answered_at) AS answered,
-    SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) AS correct
-    FROM review_tasks WHERE session_id = ? AND word = ?`)
-    .bind(sessionId, task.word).first<{ answered: number; correct: number }>();
-  if (Number(wordScore?.answered) === 3) {
-    const current = await db.prepare(`SELECT ease, interval_days, repetitions FROM user_words
-      WHERE user_id = ? AND word = ?`).bind(DEMO_USER_ID, task.word)
-      .first<{ ease: number; interval_days: number; repetitions: number }>();
-    if (current) {
-      const correct = Number(wordScore?.correct ?? 0);
-      const quality = correct === 3 ? 5 : correct === 2 ? 4 : correct === 1 ? 2 : 1;
-      const repetitions = quality < 3 ? 0 : current.repetitions + 1;
-      const interval = quality < 3 ? 1 : repetitions === 1 ? 1 : repetitions === 2
-        ? 3 : Math.max(4, Math.round(current.interval_days * (current.ease / 100)));
-      const ease = Math.max(130, Math.round(current.ease
-        + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)) * 100));
-      await db.prepare(`UPDATE user_words SET ease = ?, interval_days = ?, repetitions = ?,
-        next_review = ?, last_reviewed = ?, updated_at = ? WHERE user_id = ? AND word = ?`)
-        .bind(ease, interval, repetitions, datePlusDays(interval), timestamp, timestamp, DEMO_USER_ID, task.word).run();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows: taskRows } = await client.query(
+      `UPDATE review_tasks AS t
+      SET selected_answer = $1,
+        is_correct = CASE WHEN t.correct_answer = $1 THEN 1 ELSE 0 END,
+        answered_at = $2
+      FROM review_sessions AS s
+      WHERE t.id = $3 AND t.session_id = $4 AND t.answered_at IS NULL
+        AND s.id = t.session_id AND s.user_id = $5 AND s.status = 'active'
+      RETURNING t.*`,
+      [selectedAnswer, timestamp, taskId, sessionId, DEMO_USER_ID],
+    );
+    if (!taskRows.length) {
+      const { rows: existingRows } = await client.query(
+        `SELECT t.answered_at FROM review_tasks AS t
+        JOIN review_sessions AS s ON s.id = t.session_id
+        WHERE t.id = $1 AND t.session_id = $2 AND s.user_id = $3`,
+        [taskId, sessionId, DEMO_USER_ID],
+      );
+      if (!existingRows[0]?.answered_at) {
+        throw new Error("复习题目不存在或会话已经结束");
+      }
+      await client.query("COMMIT");
+      return { session: await getReviewSession(sessionId), state: await loadState() };
     }
+
+    const task = taskRows[0] as ReviewTaskRow;
+    const isCorrect = Boolean(task.is_correct);
+    await client.query(
+      `INSERT INTO review_events
+        (id, user_id, session_id, task_id, word, question_type, is_correct, answered_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        `event-${crypto.randomUUID()}`, DEMO_USER_ID, sessionId, taskId,
+        task.word, task.question_type, isCorrect ? 1 : 0, timestamp,
+      ],
+    );
+
+    const { rows: scoreRows } = await client.query(
+      `SELECT COUNT(answered_at)::int AS answered,
+        COALESCE(SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END), 0)::int AS correct
+      FROM review_tasks WHERE session_id = $1 AND word = $2`,
+      [sessionId, task.word],
+    );
+    const wordScore = scoreRows[0] as { answered: number; correct: number } | undefined;
+
+    if (Number(wordScore?.answered) === 3) {
+      const { rows: currentRows } = await client.query(
+        `SELECT ease, interval_days, repetitions FROM user_words
+        WHERE user_id = $1 AND word = $2 FOR UPDATE`,
+        [DEMO_USER_ID, task.word],
+      );
+      if (currentRows.length) {
+        const current = currentRows[0] as { ease: number; interval_days: number; repetitions: number };
+        const correct = Number(wordScore?.correct ?? 0);
+        const quality = correct === 3 ? 5 : correct === 2 ? 4 : correct === 1 ? 2 : 1;
+        const repetitions = quality < 3 ? 0 : current.repetitions + 1;
+        const interval =
+          quality < 3 ? 1
+          : repetitions === 1 ? 1
+          : repetitions === 2 ? 3
+          : Math.max(4, Math.round(current.interval_days * (current.ease / 100)));
+        const ease = Math.max(
+          130,
+          Math.round(current.ease + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)) * 100),
+        );
+        await client.query(
+          `UPDATE user_words SET ease = $1, interval_days = $2, repetitions = $3,
+            next_review = $4, last_reviewed = $5, updated_at = $6
+          WHERE user_id = $7 AND word = $8`,
+          [ease, interval, repetitions, datePlusDays(interval), timestamp, timestamp, DEMO_USER_ID, task.word],
+        );
+      }
+    }
+
+    const { rows: remainingRows } = await client.query(
+      "SELECT COUNT(*)::int AS count FROM review_tasks WHERE session_id = $1 AND answered_at IS NULL",
+      [sessionId],
+    );
+    if (!remainingRows[0]?.count) {
+      await client.query(
+        "UPDATE review_sessions SET status = 'completed', completed_at = $1 WHERE id = $2",
+        [timestamp, sessionId],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
 
-  const remaining = await db.prepare(`SELECT COUNT(*) AS count FROM review_tasks
-    WHERE session_id = ? AND answered_at IS NULL`).bind(sessionId).first<{ count: number }>();
-  if (!remaining?.count) {
-    await db.prepare("UPDATE review_sessions SET status = 'completed', completed_at = ? WHERE id = ?")
-      .bind(timestamp, sessionId).run();
-  }
   return { session: await getReviewSession(sessionId), state: await loadState() };
 }
 
 export async function cancelReviewSession(sessionId: string) {
   await ensureDatabase();
-  await getD1().prepare(`UPDATE review_sessions SET status = 'cancelled', completed_at = ?
-    WHERE id = ? AND user_id = ? AND status = 'active'`)
-    .bind(nowIso(), sessionId, DEMO_USER_ID).run();
+  await pool.query(
+    `UPDATE review_sessions SET status = 'cancelled', completed_at = $1
+    WHERE id = $2 AND user_id = $3 AND status = 'active'`,
+    [nowIso(), sessionId, DEMO_USER_ID],
+  );
   return loadState();
 }

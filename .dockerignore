@@ -1,0 +1,13 @@
+.git
+.env*
+!.env.production.example
+node_modules
+dist
+.next
+.vinext
+.wrangler
+coverage
+outputs
+work
+*.log
+.DS_Store

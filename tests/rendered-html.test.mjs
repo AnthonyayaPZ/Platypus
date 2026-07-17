@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const root = new URL("../", import.meta.url);
@@ -57,11 +57,75 @@ test("keeps personal notes, group membership, and review history separate", asyn
   assert.match(runtime, /Asia\/Shanghai/);
 });
 
-test("packages every database migration for deployment", async () => {
-  await Promise.all([
-    access(new URL("dist/.openai/drizzle/0000_majestic_harrier.sql", root)),
-    access(new URL("dist/.openai/drizzle/0001_familiar_miracleman.sql", root)),
-    access(new URL("dist/.openai/drizzle/0002_giant_black_crow.sql", root)),
-    access(new URL("dist/.openai/drizzle/0003_heavy_karnak.sql", root)),
+test("generates PostgreSQL-compatible schema and migration", async () => {
+  const [schema, migration, config] = await Promise.all([
+    readFile(new URL("db/schema.ts", root), "utf8"),
+    readFile(new URL("drizzle/0000_round_phalanx.sql", root), "utf8"),
+    readFile(new URL("drizzle.config.ts", root), "utf8"),
   ]);
+
+  assert.doesNotMatch(schema, /sqliteTable|drizzle-orm\/sqlite-core/);
+  assert.match(schema, /pgTable|drizzle-orm\/pg-core/);
+  assert.match(migration, /CREATE TABLE "dictionary_entries"/);
+  assert.match(config, /postgresql/);
+  assert.match(config, /DATABASE_URL/);
+});
+
+test("supports static word-list suggestions and word-library management", async () => {
+  const [page, searchRoute, stateRoute, runtime, schema, wordList, matcher, cleanupMigration] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/api/search/route.ts", root), "utf8"),
+    readFile(new URL("app/api/state/route.ts", root), "utf8"),
+    readFile(new URL("db/runtime.ts", root), "utf8"),
+    readFile(new URL("db/schema.ts", root), "utf8"),
+    readFile(new URL("public/wordlists/common-english.txt", root), "utf8"),
+    readFile(new URL("lib/word-suggestions.ts", root), "utf8"),
+    readFile(new URL("drizzle/0002_flimsy_franklin_storm.sql", root), "utf8"),
+  ]);
+
+  assert.match(page, /role="combobox"/);
+  assert.match(page, /getWordSuggestions/);
+  assert.match(page, /event\.key === "Tab"/);
+  assert.match(page, /window\.confirm/);
+  assert.match(page, /setDefaultGroup/);
+  assert.match(page, /removeWord/);
+  assert.doesNotMatch(searchRoute, /suggestDictionary|search\?suggest/);
+  assert.match(stateRoute, /deleteGroup/);
+  assert.match(stateRoute, /至少需要保留一个词库/);
+  assert.doesNotMatch(runtime, /suggestDictionary|word LIKE \$1/);
+  assert.doesNotMatch(schema, /text_pattern_ops/);
+  assert.match(schema, /word_groups_one_default_idx/);
+  assert.equal(wordList.trim().split("\n").length, 40_000);
+  assert.match(wordList, /^resilient$/m);
+  assert.match(matcher, /distanceFromTypedPrefix/);
+  assert.match(matcher, /frequencyRank/);
+  assert.match(cleanupMigration, /DROP INDEX "dictionary_entries_word_prefix_idx"/);
+});
+
+test("ranks completions by frequency and tolerates common spelling mistakes", async () => {
+  const { suggestWords } = await import(new URL("../lib/word-suggestions.ts", import.meta.url));
+  const words = ["result", "research", "resilient", "resource", "ephemeral"];
+
+  assert.deepEqual(
+    suggestWords(words, "res", 3).map((item) => item.word),
+    ["result", "research", "resilient"],
+  );
+  assert.equal(suggestWords(words, "resiliant", 3)[0]?.word, "resilient");
+  assert.equal(suggestWords(words, "reislient", 3)[0]?.word, "resilient");
+});
+
+test("includes deployable PostgreSQL container configuration", async () => {
+  const [compose, dockerfile, caddy, envExample] = await Promise.all([
+    readFile(new URL("compose.yaml", root), "utf8"),
+    readFile(new URL("Dockerfile", root), "utf8"),
+    readFile(new URL("Caddyfile", root), "utf8"),
+    readFile(new URL(".env.production.example", root), "utf8"),
+  ]);
+
+  assert.match(compose, /service_completed_successfully/);
+  assert.match(compose, /postgres:17-alpine/);
+  assert.doesNotMatch(compose, /5432:5432/);
+  assert.match(dockerfile, /node:22-alpine/);
+  assert.match(caddy, /reverse_proxy app:3000/);
+  assert.match(envExample, /DATABASE_URL=/);
 });
