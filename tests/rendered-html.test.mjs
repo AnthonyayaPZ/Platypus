@@ -71,27 +71,47 @@ test("generates PostgreSQL-compatible schema and migration", async () => {
   assert.match(config, /DATABASE_URL/);
 });
 
-test("supports indexed search suggestions and word-library management", async () => {
-  const [page, searchRoute, stateRoute, runtime, schema, migration] = await Promise.all([
+test("supports static word-list suggestions and word-library management", async () => {
+  const [page, searchRoute, stateRoute, runtime, schema, wordList, matcher, cleanupMigration] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/api/search/route.ts", root), "utf8"),
     readFile(new URL("app/api/state/route.ts", root), "utf8"),
     readFile(new URL("db/runtime.ts", root), "utf8"),
     readFile(new URL("db/schema.ts", root), "utf8"),
-    readFile(new URL("drizzle/0001_acoustic_agent_brand.sql", root), "utf8"),
+    readFile(new URL("public/wordlists/common-english.txt", root), "utf8"),
+    readFile(new URL("lib/word-suggestions.ts", root), "utf8"),
+    readFile(new URL("drizzle/0002_flimsy_franklin_storm.sql", root), "utf8"),
   ]);
 
   assert.match(page, /role="combobox"/);
+  assert.match(page, /getWordSuggestions/);
+  assert.match(page, /event\.key === "Tab"/);
   assert.match(page, /window\.confirm/);
   assert.match(page, /setDefaultGroup/);
   assert.match(page, /removeWord/);
-  assert.match(searchRoute, /suggestDictionary/);
+  assert.doesNotMatch(searchRoute, /suggestDictionary|search\?suggest/);
   assert.match(stateRoute, /deleteGroup/);
   assert.match(stateRoute, /至少需要保留一个词库/);
-  assert.match(runtime, /word LIKE \$1/);
-  assert.match(schema, /text_pattern_ops/);
+  assert.doesNotMatch(runtime, /suggestDictionary|word LIKE \$1/);
+  assert.doesNotMatch(schema, /text_pattern_ops/);
   assert.match(schema, /word_groups_one_default_idx/);
-  assert.match(migration, /dictionary_entries_word_prefix_idx/);
+  assert.equal(wordList.trim().split("\n").length, 40_000);
+  assert.match(wordList, /^resilient$/m);
+  assert.match(matcher, /distanceFromTypedPrefix/);
+  assert.match(matcher, /frequencyRank/);
+  assert.match(cleanupMigration, /DROP INDEX "dictionary_entries_word_prefix_idx"/);
+});
+
+test("ranks completions by frequency and tolerates common spelling mistakes", async () => {
+  const { suggestWords } = await import(new URL("../lib/word-suggestions.ts", import.meta.url));
+  const words = ["result", "research", "resilient", "resource", "ephemeral"];
+
+  assert.deepEqual(
+    suggestWords(words, "res", 3).map((item) => item.word),
+    ["result", "research", "resilient"],
+  );
+  assert.equal(suggestWords(words, "resiliant", 3)[0]?.word, "resilient");
+  assert.equal(suggestWords(words, "reislient", 3)[0]?.word, "resilient");
 });
 
 test("includes deployable PostgreSQL container configuration", async () => {

@@ -15,6 +15,13 @@
       "when": 1784188198237,
       "tag": "0001_acoustic_agent_brand",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784252367905,
+      "tag": "0002_flimsy_franklin_storm",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,1 @@
+DROP INDEX "dictionary_entries_word_prefix_idx";

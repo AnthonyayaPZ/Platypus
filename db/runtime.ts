@@ -271,24 +271,6 @@ export async function searchDictionary(query: string) {
   };
 }
 
-export async function suggestDictionary(prefix: string, limit = 8) {
-  await ensureDatabase();
-  const safeLimit = Math.min(12, Math.max(1, Math.trunc(limit)));
-  const { rows } = await pool.query(
-    `SELECT word, phonetic, meaning
-    FROM dictionary_entries
-    WHERE word LIKE $1
-    ORDER BY LENGTH(word), word
-    LIMIT $2`,
-    [`${prefix}%`, safeLimit],
-  );
-  return rows.map((row: Record<string, unknown>) => ({
-    word: String(row.word),
-    phonetic: String(row.phonetic),
-    meaning: String(row.meaning),
-  }));
-}
-
 export async function saveDictionaryEntry(entry: WordEntry, source = "llm") {
   await ensureDatabase();
   const timestamp = nowIso();

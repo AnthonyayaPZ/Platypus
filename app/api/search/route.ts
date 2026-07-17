@@ -1,20 +1,8 @@
-import { saveDictionaryEntry, searchDictionary, suggestDictionary } from "../../../db/runtime";
+import { saveDictionaryEntry, searchDictionary } from "../../../db/runtime";
 import { DictionaryGenerationError, generateDictionaryEntry } from "../../../lib/llm";
 
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
-  const suggestionPrefix = params.get("suggest")?.trim().toLowerCase();
-  if (suggestionPrefix !== undefined) {
-    if (!suggestionPrefix) return Response.json({ suggestions: [] });
-    if (!/^[a-z][a-z'-]{0,47}$/.test(suggestionPrefix)) {
-      return Response.json({ suggestions: [] });
-    }
-    return Response.json(
-      { suggestions: await suggestDictionary(suggestionPrefix) },
-      { headers: { "cache-control": "private, max-age=30" } },
-    );
-  }
-
   const query = params.get("q")?.trim().toLowerCase() ?? "";
   if (!query) return Response.json({ error: "请输入要检索的单词" }, { status: 400 });
   if (!/^[a-z][a-z'-]{0,47}$/.test(query)) {

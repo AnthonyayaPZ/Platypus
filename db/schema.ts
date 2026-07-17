@@ -14,9 +14,7 @@ export const dictionaryEntries = pgTable("dictionary_entries", {
   source: text("source").notNull().default("demo-dictionary"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
-}, (table) => [
-  index("dictionary_entries_word_prefix_idx").on(table.word.asc().op("text_pattern_ops")),
-]);
+});
 
 export const wordRelations = pgTable("word_relations", {
   sourceWord: text("source_word").notNull().references(() => dictionaryEntries.word, { onDelete: "cascade" }),

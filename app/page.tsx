@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { WordEntry } from "../lib/dictionary";
 import type { RelationDetail } from "../lib/relations";
+import { getWordSuggestions, type WordSuggestion } from "../lib/word-suggestions";
 
 type View = "search" | "review" | "cards" | "library";
 type Group = { id: string; name: string; color: string; is_default: number; word_count: number; due_count: number };
@@ -11,7 +12,6 @@ type SavedWord = { word: string; group_id: string; added_at: string; note: strin
 type ReviewTask = { id: string; word: string; question_type: "audio-word" | "word-meaning" | "meaning-word"; position: number; options: string[]; correct_answer: string; selected_answer: string | null; is_correct: boolean | null; answered_at: string | null; phonetic: string; meaning: string; summary: string };
 type ReviewSession = { id: string; group_id: string; status: "active" | "completed"; word_count: number; total_tasks: number; tasks: ReviewTask[] };
 type StatePayload = { groups: Group[]; savedWords: SavedWord[]; wordMeta: WordMeta[]; session?: ReviewSession | null; error?: string };
-type SearchSuggestion = { word: string; phonetic: string; meaning: string };
 
 const navItems: { id: View; label: string; icon: string }[] = [
   { id: "search", label: "查单词", icon: "⌕" },
@@ -157,38 +157,35 @@ function LoadingState() {
 function SearchView({ query, setQuery, result, groups, selectedGroup, setSelectedGroup, meta, searching, searchWord, postAction, setToast, total, due, setView }: {
   query: string; setQuery: (value: string) => void; result: WordEntry | null; groups: Group[]; selectedGroup: string; setSelectedGroup: (value: string) => void; meta: WordMeta | null; searching: boolean; searchWord: (word: string) => Promise<void>; postAction: (payload: Record<string, unknown>) => Promise<StatePayload>; setToast: (value: string) => void; total: number; due: number; setView: (view: View) => void;
 }) {
-  const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([]);
+  const [suggestions, setSuggestions] = useState<WordSuggestion[]>([]);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [activeSuggestion, setActiveSuggestion] = useState(-1);
   const suggestionPrefix = query.trim().toLowerCase();
-  const canShowSuggestions = /^[a-z][a-z'-]{0,47}$/.test(suggestionPrefix) && suggestionPrefix !== result?.word;
+  const canShowSuggestions = /^[a-z]{1,48}$/.test(suggestionPrefix) && suggestionPrefix !== result?.word;
   const showSuggestions = suggestionsOpen && canShowSuggestions && suggestions.length > 0;
 
   useEffect(() => {
     const prefix = query.trim().toLowerCase();
-    if (!/^[a-z][a-z'-]{0,47}$/.test(prefix) || prefix === result?.word) return;
-    const controller = new AbortController();
+    if (!/^[a-z]{1,48}$/.test(prefix) || prefix === result?.word) return;
+    let cancelled = false;
     const timer = window.setTimeout(async () => {
       try {
-        const response = await fetch(`/api/search?suggest=${encodeURIComponent(prefix)}`, {
-          signal: controller.signal,
-        });
-        if (!response.ok) return;
-        const data = await response.json() as { suggestions?: SearchSuggestion[] };
-        setSuggestions(data.suggestions ?? []);
-        setSuggestionsOpen(Boolean(data.suggestions?.length));
-        setActiveSuggestion(-1);
-      } catch (error) {
-        if ((error as Error).name !== "AbortError") setSuggestions([]);
+        const matches = await getWordSuggestions(prefix);
+        if (cancelled) return;
+        setSuggestions(matches);
+        setSuggestionsOpen(matches.length > 0);
+        setActiveSuggestion(matches.length ? 0 : -1);
+      } catch {
+        if (!cancelled) setSuggestions([]);
       }
-    }, 180);
+    }, 120);
     return () => {
-      controller.abort();
+      cancelled = true;
       window.clearTimeout(timer);
     };
   }, [query, result?.word]);
 
-  const chooseSuggestion = async (suggestion: SearchSuggestion) => {
+  const chooseSuggestion = async (suggestion: WordSuggestion) => {
     setQuery(suggestion.word);
     setSuggestionsOpen(false);
     setActiveSuggestion(-1);
@@ -212,14 +209,16 @@ function SearchView({ query, setQuery, result, groups, selectedGroup, setSelecte
       setSuggestionsOpen(false);
       return;
     }
+    if ((event.key === "Enter" || event.key === "Tab") && showSuggestions) {
+      event.preventDefault();
+      const suggestion = suggestions[Math.max(0, activeSuggestion)];
+      if (suggestion) void chooseSuggestion(suggestion);
+      return;
+    }
     if (event.key === "Enter") {
       event.preventDefault();
-      const suggestion = showSuggestions && activeSuggestion >= 0 ? suggestions[activeSuggestion] : null;
-      if (suggestion) void chooseSuggestion(suggestion);
-      else {
-        setSuggestionsOpen(false);
-        void searchWord(query);
-      }
+      setSuggestionsOpen(false);
+      void searchWord(query);
     }
   };
 
@@ -242,7 +241,7 @@ function SearchView({ query, setQuery, result, groups, selectedGroup, setSelecte
       <div className="search-main">
         <div className="search-combobox">
           <div className="search-box"><span>⌕</span><input autoFocus value={query} onChange={(event) => { setQuery(event.target.value); setSuggestionsOpen(false); }} onFocus={() => setSuggestionsOpen(Boolean(suggestions.length) && canShowSuggestions)} onBlur={() => window.setTimeout(() => setSuggestionsOpen(false), 120)} onKeyDown={handleSearchKeyDown} placeholder="输入一个英文单词" aria-label="输入英文单词" role="combobox" aria-autocomplete="list" aria-expanded={showSuggestions} aria-controls="word-suggestions" aria-activedescendant={showSuggestions && activeSuggestion >= 0 ? `word-suggestion-${activeSuggestion}` : undefined} autoComplete="off" /><kbd>ENTER</kbd><button disabled={searching} onClick={() => { setSuggestionsOpen(false); void searchWord(query); }}>{searching ? "生成中…" : "查一查"}</button></div>
-          {showSuggestions && <div className="search-suggestions" id="word-suggestions" role="listbox" aria-label="匹配的单词">{suggestions.map((suggestion, index) => <button id={`word-suggestion-${index}`} role="option" aria-selected={index === activeSuggestion} className={index === activeSuggestion ? "active" : ""} key={suggestion.word} onMouseDown={(event) => event.preventDefault()} onClick={() => void chooseSuggestion(suggestion)}><span><b>{suggestion.word}</b><small>{suggestion.phonetic}</small></span><p>{suggestion.meaning}</p></button>)}</div>}
+          {showSuggestions && <div className="search-suggestions" id="word-suggestions" role="listbox" aria-label="匹配的单词">{suggestions.map((suggestion, index) => <button id={`word-suggestion-${index}`} role="option" aria-selected={index === activeSuggestion} className={index === activeSuggestion ? "active" : ""} key={suggestion.word} onMouseDown={(event) => event.preventDefault()} onClick={() => void chooseSuggestion(suggestion)}><span><b>{suggestion.match === "prefix" ? <>{suggestion.word.slice(0, suggestionPrefix.length)}<mark>{suggestion.word.slice(suggestionPrefix.length)}</mark></> : suggestion.word}</b><small>{suggestion.match === "prefix" ? "自动补全" : "拼写建议"}</small></span><p>{suggestion.match === "prefix" ? "按 Enter 或 Tab 直接查词" : `与当前输入相差 ${suggestion.distance} 处`}</p></button>)}</div>}
         </div>
         <div className="quick-words"><span>试试：</span>{["resilient", "ephemeral", "pragmatic", "vivid"].map((word) => <button key={word} onClick={() => searchWord(word)}>{word}</button>)}</div>
         {result ? <article className="word-card">

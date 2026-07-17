@@ -8,13 +8,14 @@
 flowchart TB
   subgraph Client["客户端"]
     Web["Web 浏览器"]
+    WordList["静态常用词表 · 前缀补全 · 拼写容错"]
     Android["Android 客户端（后续）"]
   end
 
   subgraph Server["云服务器 · Docker Compose"]
     Caddy["Caddy · HTTPS · 反向代理"]
     App["Node.js Web 服务 · React / Vinext"]
-    Search["词典服务 · 精确检索 · 前缀联想 · LLM 回退"]
+    Search["词典服务 · 精确检索 · LLM 回退"]
     Learning["学习服务 · 词库 · 笔记 · 间隔复习"]
     Postgres[("PostgreSQL")]
   end
@@ -22,6 +23,7 @@ flowchart TB
   LLM["兼容 OpenAI Chat Completions 的 LLM API"]
 
   Web -->|HTTPS| Caddy
+  Web --> WordList
   Android -.->|HTTPS / JSON| Caddy
   Caddy --> App
   App --> Search
@@ -89,7 +91,7 @@ npm run db:migrate
 - `group_words`：单词与词库的多对多关系。
 - `review_sessions`、`review_tasks`、`review_events`：可恢复的复习会话、题目和答题历史。
 
-搜索联想使用 PostgreSQL B-tree `text_pattern_ops` 前缀索引。相较进程内字典树，该方案无需在每个 Web 实例复制词典，新增 LLM 缓存也能立即被所有实例检索。
+搜索联想与 PostgreSQL 解耦。浏览器首次输入时加载 `public/wordlists/common-english.txt`，在本地按词频顺序执行前缀补全；没有直接前缀结果时，对三个字母以上的输入执行受限 Damerau–Levenshtein 匹配，允许短输入错一处、六个字母以上错两处，并将换位视为一次错误。词表加载后由浏览器缓存，联想过程不访问 API、PostgreSQL 或 LLM。词表包含 40,000 个常用词，来源和许可见 [`public/wordlists/NOTICE.md`](public/wordlists/NOTICE.md)。
 
 ## 云服务器部署
 
@@ -149,14 +151,13 @@ docker compose --env-file .env.production up -d --build
 
 ## API
 
-### 检索与联想
+### 单词检索
 
 ```http
 GET /api/search?q=resilient
-GET /api/search?suggest=res
 ```
 
-精确检索优先读取 PostgreSQL；未命中时调用 LLM 并缓存。联想仅查询已缓存词典，不调用 LLM。
+精确检索优先读取 PostgreSQL；未命中时调用 LLM 并缓存。输入联想在浏览器中读取静态常用词表完成，不经过 API。
 
 ### 状态与学习操作
 
