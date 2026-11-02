@@ -22,6 +22,10 @@ Web、Android 和服务端代码已接通相同 API；保留独立离线演示�
 
 本次采用版本目录 `/root/platypus-releases/<commit>` 与 `/root/platypus-current` 软链接切换版本。Web 仍为 `platypus.service`、仍使用端口 3000；新增 `platypus-captions.service`、`platypus-video-worker.service`。模板在 `deploy/systemd/`，仅适用于上述已确认的服务器路径。字幕服务只绑定本机 8080，不新增公网监听。新配置保存在权限为 600 的 `/etc/platypus-video-study.env`，原数据库/LLM 环境文件保留；小内存服务器将后台并发设为 1。
 
+这台 1.6GB 内存实例的完整 `npm ci` 曾触及 640MB 独立任务内存上限。当前代码除测试用 PGlite 外所需依赖在旧环境中均已安装，并已逐项核对版本；部署时复用 `/root/Platypus/node_modules`，新版本在独立目录构建，不能删除该依赖目录。后续依赖升级应在更大内存的构建环境准备，或继续用有内存上限的独立构建任务，不应直接无上限安装。
+
+重启后还发现全局 DNS 指向已停用的本地代理。可选配置 `40-private-dns.conf` 将 `/etc/platypus-resolv.conf` 只挂载到这三个应用服务内；示例 DNS 来自该实例 eth0 的 DHCP 信息，部署到别的服务器需重新确认，不能照搬。它不修改主机 DNS 或启动全机代理。`50-background-limits.conf` 用于两个新后台服务，限制资源占用。Python 环境使用服务器现有的 uv 安装，不要求升级系统 Python。
+
 上线顺序：备份真实数据库及旧服务配置，准备版本目录并安装依赖、构建，执行新增迁移，再安装服务配置并切换软链接、重启 Web。版本目录不要保存环境凭据。`scripts/ops/service-env.mjs` 可以从运行中的 systemd 服务继承环境执行维护命令，避免在终端打印密钥；`backup-database.mjs` 使用 PostgreSQL 16 工具备份并检查归档可读性。
 
 回退时先停止两个新后台服务，把软链接切回上一个已验证版本（或恢复原 Web 服务配置），重启 `platypus.service`。新迁移只新增表，旧版仍可读取旧表；不要清库或直接恢复备份覆盖部署后新增的数据。
