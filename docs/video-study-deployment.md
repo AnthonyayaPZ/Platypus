@@ -18,6 +18,8 @@ Web、Android 和服务端代码已接通相同 API。当前界面不再显示�
 
 手机阅读分段以 12–18 词为目标、24 词为上限，结合分句语义与现有词卡排版估计。旧文章可用后台任务重新分段并对齐中文，不重新下载；旧 APK 保持兼容，但已缓存正文需从查找中重新选择视频才能更新。原句与收藏来源保留，详见 [`subtitle-reading-segments.md`](subtitle-reading-segments.md)。
 
+2026-11-03 已上线并完成两篇已有文章的处理，分别为148段和482段，译文全部完成；当前部署验收见 [`deployments/2026-11-03.md`](deployments/2026-11-03.md)。
+
 ## 现有阿里云系统服务部署
 
 已确认这台服务器使用 `/root/Platypus/.env` 与 `platypus.service`，实际数据库是本机 PostgreSQL 16 的 5433 端口，不是 Docker 中的另一个数据库。不要将 Compose 示例直接套在这套运行环境上，也不要覆盖原有 `.env`。
