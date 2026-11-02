@@ -3,6 +3,8 @@ import { pool } from "../../db/index";
 import { DEMO_USER_ID } from "../../db/runtime";
 import { normalizeStudyWord, type DraftWord, type ImportItem, type SubtitleSentence, type VideoStudyDocument, type VideoStudyJob, type WordSource } from "../video-study";
 import { VideoStudyError, type SqlExecutor } from "./sql";
+import { exampleDocuments } from "../video-study-examples";
+import type { StudyHistoryItem } from "../video-study-history";
 
 export type DocumentInput = { source: "youtube"; videoId: string } | { source: "upload"; title: string; subtitle: string };
 export type ClaimedJob = { id: string; kind: "document" | "import"; documentId: string; payload: Record<string, unknown>; workerId: string };
@@ -11,8 +13,31 @@ const hash = (payload: unknown) => createHash("sha256").update(JSON.stringify(pa
 
 export class VideoStudyStore {
   constructor(readonly sql: SqlExecutor = pool) {}
+  private exampleSeed: Promise<void> | null = null;
+
+  async ensureExamples() {
+    if (!this.exampleSeed) this.exampleSeed = (async () => {
+      for (const document of exampleDocuments) {
+        await this.sql.query(
+          `INSERT INTO video_study_documents(id,title,channel,duration,status,sentences,created_at,updated_at)
+           VALUES($1,$2,$3,$4,'ready',$5::jsonb,$6,$6) ON CONFLICT(id) DO NOTHING`,
+          [document.id, document.title, document.channel, document.duration, JSON.stringify(document.sentences), now()],
+        );
+      }
+    })().catch((error) => { this.exampleSeed = null; throw error; });
+    await this.exampleSeed;
+  }
+
+  async history(): Promise<StudyHistoryItem[]> {
+    await this.ensureExamples();
+    const { rows } = await this.sql.query(`SELECT id,title,channel,duration,status,updated_at,jsonb_array_length(sentences) AS sentence_count
+      FROM video_study_documents ORDER BY (id LIKE 'demo-%') ASC,updated_at DESC,id ASC`);
+    return rows.map((row) => ({ id: String(row.id), title: String(row.title), channel: String(row.channel), duration: String(row.duration),
+      status: row.status as VideoStudyDocument["status"], updatedAt: String(row.updated_at), sentenceCount: Number(row.sentence_count), isExample: String(row.id).startsWith("demo-") }));
+  }
 
   async document(id: string): Promise<VideoStudyDocument | null> {
+    if (exampleDocuments.some((document) => document.id === id)) await this.ensureExamples();
     const { rows } = await this.sql.query("SELECT * FROM video_study_documents WHERE id=$1", [id]);
     const row = rows[0];
     if (!row) return null;
@@ -50,6 +75,7 @@ export class VideoStudyStore {
   }
 
   async enqueueImport(requestId: string, groupId: string, words: DraftWord[]): Promise<VideoStudyJob> {
+    await this.ensureExamples();
     const { rows: groups } = await this.sql.query("SELECT name FROM word_groups WHERE id=$1 AND user_id=$2", [groupId, DEMO_USER_ID]);
     if (!groups.length) throw new VideoStudyError("请选择有效的目标词库", 404);
     const payload = { groupId, words };

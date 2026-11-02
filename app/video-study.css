@@ -156,3 +156,61 @@
 .video-upload-panel textarea { min-height: 130px; font-family: monospace; resize: vertical; }
 .video-error { margin: 14px; border-radius: 9px; padding: 12px; background: #f9e9df; color: #985d43; font-size: 13px; }
 .video-error button { background: none; border: 1px solid currentColor; border-radius: 6px; padding: 7px; cursor: pointer; }
+
+/* Reader-first layout: controls only appear when explicitly opened. */
+.video-study-page.video-reader { max-width: 1120px; margin: 0 auto; padding: 16px 24px 150px; }
+.video-reader-header { display: flex; align-items: flex-start; gap: 16px; padding: 0 0 14px; }
+.video-reader-header > div { flex: 1; min-width: 0; }
+.video-reader-header h1 { font: 23px/1.3 Georgia, "Songti SC", serif; margin: 0; color: var(--ink); }
+.video-reader-header small { display: block; font-size: 10px; color: var(--muted); margin-top: 5px; }
+.video-history-button { display: inline-flex; gap: 5px; align-items: center; background: none; border: 0; padding: 8px 0 8px 8px; color: #61776a; font-size: 11px; white-space: nowrap; cursor: pointer; }
+.video-history-button svg { width: 18px; height: 18px; }
+.video-study-grid.video-reader-grid { display: block; }
+.video-reader .video-transcript-panel { border: 0; border-radius: 0; background: transparent; }
+.video-reader .video-reading-toolbar { padding: 9px 0; background: transparent; font-size: 11px; }
+.video-reader .video-sentence { padding: 20px 0; }
+.video-reader .video-word-flow { gap: 7px; }
+.video-reader .video-translation { font-size: 13px; line-height: 1.8; margin-top: 13px; }
+.video-reader-actions { position: fixed; right: 22px; bottom: 24px; display: flex; flex-direction: column; gap: 12px; z-index: 35; }
+.video-reader-actions > button { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%; background: #244b3e; color: #fff; border: 1px solid #ffffff33; box-shadow: 0 4px 16px #143b302b; cursor: pointer; position: relative; }
+.video-reader-actions > button:first-child { background: #fcfbf6; color: #244b3e; border-color: #dce1d7; }
+.video-reader-actions b { position: absolute; right: -3px; top: -4px; border-radius: 20px; min-width: 19px; height: 19px; display: grid; place-items: center; padding: 0 4px; background: #db8e61; color: white; font: 10px sans-serif; }
+.video-reader-actions i { position: absolute; width: 7px; height: 7px; border-radius: 50%; left: 4px; bottom: 4px; background: #eebc7b; }
+.video-sheet-layer { position: fixed; inset: 0; z-index: 90; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.video-sheet-backdrop { position: absolute; inset: 0; border: 0; background: #14312766; }
+.video-sheet { position: relative; width: min(100%, 540px); max-height: 85dvh; overflow: auto; background: #fbfaf4; border-radius: 20px; padding: 20px; box-shadow: 0 16px 60px #102b3033; outline: none; }
+.video-sheet-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.video-sheet-heading h2 { font: 22px Georgia, "Songti SC", serif; margin: 0; }
+.video-sheet-heading > button { border: 0; background: none; padding: 4px 8px; font-size: 26px; color: #738777; cursor: pointer; }
+.video-service-hint { color: #8c775d; font-size: 12px; line-height: 1.6; margin: 0 0 12px; }
+.video-service-hint:empty { display: none; }
+.video-sheet .video-title-form { margin: 0; }
+.video-sheet .video-upload-panel { padding: 12px; margin: 0; }
+.video-sheet .video-candidates { margin: 12px 0 0; padding: 0; background: transparent; border: 0; }
+.video-sheet .video-draft-panel.open { position: static; display: flex; padding: 0; border: 0; box-shadow: none; border-radius: 0; background: transparent; max-height: calc(85dvh - 40px); }
+.video-sheet .video-draft-body { max-height: none; overflow: auto; flex: 1; }
+.video-sheet .video-drawer-close { display: block; }
+.video-sheet .video-section-title { flex-shrink: 0; }
+.video-sheet .video-section-title h2 { margin: 0 0 12px; }
+.video-sheet .video-batch li span { white-space: normal; }
+.video-history-list { display: grid; gap: 6px; }
+.video-history-list > button { display: flex; align-items: center; gap: 12px; text-align: left; width: 100%; background: transparent; border: 1px solid transparent; border-radius: 11px; padding: 14px 10px; color: var(--ink); cursor: pointer; }
+.video-history-list > button.current { background: #eaf0e5; border-color: #cddacb; }
+.video-history-list > button > span:nth-child(2) { min-width: 0; flex: 1; }
+.video-history-list b { display: block; font: 18px/1.3 Georgia, "Songti SC", serif; overflow-wrap: anywhere; }
+.video-history-list small { display: block; color: #83917f; font-size: 11px; margin-top: 7px; }
+.video-history-mark { border: 1px solid #d7dfcf; border-radius: 7px; padding: 8px 6px; color: #819078; font-size: 10px; flex-shrink: 0; }
+.video-reader button:focus-visible, .video-sheet button:focus-visible { outline: 2px solid #bd815f; outline-offset: 3px; }
+@media (max-width: 760px) {
+  .video-study-page.video-reader { padding: 12px 17px 150px; }
+  .video-reader-header { gap: 10px; padding-bottom: 12px; }
+  .video-reader-header h1 { font-size: 22px; }
+  .video-history-button span { font-size: 11px; }
+  .video-reader .video-sentence { padding: 17px 0; }
+  .video-reader-actions { right: 15px; bottom: 83px; }
+  .video-demo-standalone .video-reader-actions { bottom: 18px; }
+  .video-reader .video-inline-message { bottom: 205px; }
+  .video-sheet-layer { padding: 0; align-items: flex-end; }
+  .video-sheet { width: 100%; border-radius: 21px 21px 0 0; padding: 18px 18px max(18px, env(safe-area-inset-bottom)); }
+  .video-demo-home { margin: 16px 17px 4px; }
+}

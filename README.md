@@ -154,15 +154,15 @@ docker compose --env-file .env.production up -d --build
 
 ## 视频字幕学词
 
-入口是 Web/Android 的“视频学词”，也可直接打开 Web 的 `/video-study`。页面提供“真实视频”和“离线演示”两种独立模式：
+入口是 Web/Android 的“视频学词”，也可直接打开 Web 的 `/video-study`。两端均采用阅读优先布局：默认只有正文，右下角两个圆形按钮分别展开查找和缓存区，顶部“学习记录”可重新打开以前载入的文章。
 
 ```powershell
 npx vinext dev --port 3100
 ```
 
-访问 `http://localhost:3100/video-study`。真实模式支持标题/链接搜索、确认视频、获取英文字幕、逐句中文翻译和词块点选，也支持导入 SRT/VTT。待收藏区可以编辑、手动新增、去重和选择已有词库；点击“生成并收藏”后才按现有对比学习规则处理。任务保存在 PostgreSQL，页面关闭后后台继续；失败词保留并可单独重试。
+访问 `http://localhost:3100/video-study`。查找面板支持标题/链接搜索、确认视频和导入 SRT/VTT；正文提供逐句中文翻译和词块点选。缓存区可以编辑、手动新增、去重和选择已有词库；点击“生成并收藏”后才按现有对比学习规则处理。任务保存在 PostgreSQL，页面关闭后后台继续；失败词保留并可单独重试。
 
-“离线演示”不需要数据库、字幕服务或 LLM，不会写入真实词库。Web 与 Android 共用 `shared/video-study-demo.json` 的自编双语样例，真实与演示草稿分开保存。
+学习记录从现有服务器字幕文档中读取，也保留各自设备的历史与文章缓存；两篇自编双语样例位于 `shared/video-study-demo.json`，作为内置文章一并列入，不再提供演示模式开关。内置文章可离线阅读；点词仅写草稿，但手动提交收藏会调用真实后台。旧版本的演示草稿会一次性合并到统一缓存区。
 
 真实功能需要新增数据库迁移、`captions` 字幕服务和 `video-worker` 后台任务进程。完整部署与验收步骤见 [`docs/video-study-deployment.md`](docs/video-study-deployment.md)。仍沿用个人共享工作区，不增加注册登录或用户隔离。
 

@@ -11,6 +11,9 @@ import retrofit2.http.Path
 import com.anthonyaya.platypus.ui.videostudy.*
 
 interface PlatypusApi {
+    @GET("api/video-study/history")
+    suspend fun videoHistory(): VideoHistoryResponse
+
     @GET("api/video-study/status")
     suspend fun videoStatus(): VideoServiceStatus
 

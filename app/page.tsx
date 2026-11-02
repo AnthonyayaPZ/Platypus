@@ -137,7 +137,7 @@ export default function Home() {
     </aside>
 
     <section className="workspace">
-      <header className="mobile-header"><button className="brand" onClick={() => setView("search")}><span className="brand-mark"><span className="brand-eye" /></span><span><b>鸭嘴兽单词</b></span></button><span className="streak-pill">今日 {groups.reduce((sum, group) => sum + group.due_count, 0)} 词</span></header>
+      {view !== "video" && <header className="mobile-header"><button className="brand" onClick={() => setView("search")}><span className="brand-mark"><span className="brand-eye" /></span><span><b>鸭嘴兽单词</b></span></button><span className="streak-pill">今日 {groups.reduce((sum, group) => sum + group.due_count, 0)} 词</span></header>}
       {view === "video" ? <VideoStudyDemo groups={groups} onImported={() => { void fetch("/api/state").then(async (response) => { if (response.ok) applyState(await response.json() as StatePayload); }).catch(() => setToast("收藏已完成，重新打开词库可刷新内容")); }} /> : loading ? <LoadingState /> : view === "search" ?
         <SearchView query={query} setQuery={setQuery} result={result} groups={groups} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} meta={result ? metaFor(result.word) : null} searching={searching} searchWord={searchWord} postAction={postAction} setToast={setToast} total={new Set(savedWords.map((item) => item.word)).size} due={groups.reduce((sum, group) => sum + group.due_count, 0)} setView={setView} />
         : view === "review" ? <ReviewView key={selectedGroup} groups={groups} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} postAction={postAction} setToast={setToast} />

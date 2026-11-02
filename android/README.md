@@ -48,16 +48,15 @@
 .\gradlew.bat assembleRelease -PPLATYPUS_API_BASE_URL=https://words.example.com/
 ```
 
-## 视频学词交互 Demo
+## 视频学词：阅读与学习记录
 
-运行应用后进入底部“视频学词”。默认“真实视频”模式使用与 Web 相同的 API，支持搜索、字幕翻译、点词、草稿编辑、SRT/VTT 文件或文本导入、后台批量收藏和失败重试。后台服务需先按 `../docs/video-study-deployment.md` 更新，否则会显示服务未就绪。
+运行应用后进入底部“视频学词”。默认直接显示文章，不显示模式切换和宣传卡；两个圆形按钮分别展开查找和缓存，顶部“学习记录”列出已载入文章及两篇内置文章。支持搜索、字幕翻译、点词、草稿编辑、SRT/VTT 导入、后台收藏和失败重试。
 
-点击“离线演示”可使用内置双语示例，即使后端不可用也可以体验，不访问 YouTube / LLM、不写入词库。两种模式的 SharedPreferences 草稿相互隔离，真实模式还保存当前文档、批次编号及未确认提交，重开页面可以恢复进度。
+文章正文通过独立原子文件保存在当前设备，历史元数据和草稿通过 SharedPreferences 保留。联网时同步服务器所有字幕记录；离线时仍可打开已经缓存的文章和内置文章。旧演示草稿会一次性并入统一缓存，不会因刷新反复添加。内置文章也使用真实收藏流程，只有手动提交才会处理。
 
-使用 Android Studio 打开 `app/src/main/java/com/anthonyaya/platypus/ui/screens/VideoStudyScreen.kt`，选择 **Split / Design** 即可在电脑预览：
+使用 Android Studio 打开 `app/src/main/java/com/anthonyaya/platypus/ui/screens/VideoStudyReaderScreen.kt`，选择 **Split / Design** 即可在电脑预览：
 
-- `VideoStudyReadingPreview`：390 × 844dp 手机字幕阅读页，包含已选词。
-- `VideoStudyDraftPreview`：缓存编辑面板及成功/失败批次状态。
+- `ReaderPreview`：390 × 844dp 的精简手机阅读页。
 
 Web 另有可交互的手机布局原型：`http://localhost:3100/video-study`。两端素材共用仓库根目录的 `shared/video-study-demo.json`，请保留整个仓库目录结构。
 

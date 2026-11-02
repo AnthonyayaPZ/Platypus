@@ -11,6 +11,8 @@ import { readJsonBody } from "../lib/server/video-study-http";
 import { processVideoStudyJob } from "../lib/server/video-study-processing";
 import { validateImportWords, VideoStudyStore } from "../lib/server/video-study-store";
 import type { SqlExecutor } from "../lib/server/sql";
+import { historyItem, mergeStudyHistory } from "../lib/video-study-history";
+import { exampleDocuments } from "../lib/video-study-examples";
 
 async function database() {
   const db = new PGlite();
@@ -29,6 +31,29 @@ async function database() {
   };
   return { db, sql, store: new VideoStudyStore(sql), ensureWord, saveWord };
 }
+
+test("history includes every stored article and built-in articles without duplicating or resetting them", async () => {
+  const { db, store } = await database();
+  try {
+    const saved = await store.enqueueDocument({ source: "upload", title: "Previously opened", subtitle: "1\n00:00:00,000 --> 00:00:02,000\nRead this article.\n" });
+    const first = await store.history();
+    const second = await store.history();
+    assert.equal(first.length, 3);
+    assert.equal(second.length, 3);
+    assert.equal(first[0].id, saved.id);
+    for (const example of exampleDocuments) {
+      const document = (await store.document(example.id))!;
+      assert.equal(document.status, "ready");
+      assert.deepEqual(document.sentences, example.sentences);
+    }
+    const opened = historyItem(exampleDocuments[1], new Date(Date.now() + 60_000).toISOString());
+    const local = mergeStudyHistory(first, [opened]);
+    const refreshed = mergeStudyHistory(local, second);
+    assert.equal(refreshed[0].id, opened.id);
+    assert.equal(refreshed[0].lastOpenedAt, opened.lastOpenedAt);
+    assert.equal(refreshed.length, 3);
+  } finally { await db.close(); }
+});
 
 test("VTT and rolling captions become ordered, non-duplicated sentences", () => {
   const cues = parseSubtitleFile("WEBVTT\n\n00:00.000 --> 00:02.000\n<c>We learn</c>\n\n00:01.000 --> 00:03.000\nWe learn every day.\n\n00:04.000 --> 00:06.000\nDon’t stop being curious!\n");

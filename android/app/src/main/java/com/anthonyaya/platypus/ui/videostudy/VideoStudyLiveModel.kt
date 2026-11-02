@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import retrofit2.HttpException
 import java.util.UUID
 
@@ -33,6 +35,7 @@ data class PendingVideoImport(val requestId: String, val groupId: String, val wo
 data class VideoLiveSession(
     val draft: List<DraftWord> = emptyList(), val documentId: String = "", val jobId: String = "",
     val acknowledged: List<String> = emptyList(), val pending: PendingVideoImport? = null,
+    val examplesMigrated: Boolean = false,
 )
 
 fun applyVideoJob(current: VideoLiveSession, job: VideoImportJob): VideoLiveSession {
@@ -57,21 +60,38 @@ data class VideoLiveState(
     val job: VideoImportJob? = null, val groups: List<WordGroup> = emptyList(),
     val candidates: List<VideoCandidate>? = null, val busy: Boolean = false,
     val message: String = "", val health: String = "正在连接服务…",
+    val history: List<StudyHistoryItem> = emptyList(), val historyError: String = "",
 ) {
     val running: Boolean get() = session.pending != null || (session.jobId.isNotEmpty() && (job == null || job.status in listOf("queued", "running")))
 }
 
 class VideoStudyLiveModel(context: Context, private val api: PlatypusApi = ApiFactory.api) : ViewModel() {
     private val store = VideoLiveStore(context)
-    private val mutable = MutableStateFlow(VideoLiveState(session = store.load()))
+    private val articleStore = VideoStudyHistoryStore(context)
+    private val examples = loadDemoVideoDocuments(context).map { it.copy(channel = "内置文章", status = "ready") }
+    private val initialSession = store.load().let { current ->
+        var draft = current.draft
+        if (!current.examplesMigrated) VideoStudyDraftStore(context).load().forEach { item ->
+            draft = addDraftWord(draft, item.word)
+            item.sources.forEach { draft = addDraftWord(draft, item.word, it) }
+        }
+        current.copy(draft = draft, documentId = current.documentId.ifBlank { examples.first().id }, examplesMigrated = true).also(store::save)
+    }
+    private val mutable = MutableStateFlow(VideoLiveState(session = initialSession,
+        document = articleStore.document(initialSession.documentId) ?: examples.first(),
+        history = mergeStudyHistory(articleStore.entries(), examples.map { it.historyItem() })))
     val state = mutable.asStateFlow()
     private var lastHealth = 0L
 
     init {
         viewModelScope.launch {
+            withContext(Dispatchers.IO) { runCatching { examples.forEach { if (articleStore.document(it.id) == null) articleStore.remember(it) } } }
+            refreshHistory()
+        }
+        viewModelScope.launch {
             while (isActive) {
                 if (System.currentTimeMillis() - lastHealth > 15_000) {
-                    attempt {
+                    attempt(notify = false) {
                         val status = api.videoStatus()
                         mutable.update { it.copy(groups = status.groups, health = when {
                             !status.workerReady -> "后台处理服务尚未就绪，任务会在队列中保留。"
@@ -94,8 +114,13 @@ class VideoStudyLiveModel(context: Context, private val api: PlatypusApi = ApiFa
                     }
                 }
                 val current = mutable.value
-                if (current.session.documentId.isNotEmpty() && (current.document?.id != current.session.documentId || current.document.status in listOf("queued", "fetching", "translating"))) {
-                    attempt { val document = api.videoDocument(mutable.value.session.documentId).document; mutable.update { it.copy(document = document) } }
+                if (current.session.documentId.isNotEmpty() && !current.session.documentId.startsWith("demo-") && (current.document?.id != current.session.documentId || current.document.status in listOf("queued", "fetching", "translating"))) {
+                    attempt(notify = false) {
+                        val id = current.session.documentId
+                        val document = api.videoDocument(id).document
+                        rememberDocument(document)
+                        mutable.update { if (it.session.documentId == id) it.copy(document = document) else it }
+                    }
                 }
                 val snapshot = mutable.value
                 if (snapshot.session.jobId.isNotEmpty() && (snapshot.job?.id != snapshot.session.jobId || snapshot.job.status in listOf("queued", "running"))) {
@@ -113,14 +138,36 @@ class VideoStudyLiveModel(context: Context, private val api: PlatypusApi = ApiFa
         updateSession { current -> applyVideoJob(current, job) }
         mutable.update { it.copy(job = job) }
     }
-    private suspend fun attempt(action: suspend () -> Unit) {
+    private suspend fun rememberDocument(document: VideoStudyDocument, opened: Boolean = false) {
+        val entries = withContext(Dispatchers.IO) { runCatching { articleStore.remember(document, opened) }.getOrNull() }
+        mutable.update { it.copy(history = mergeStudyHistory(it.history, entries ?: listOf(document.historyItem())),
+            message = if (entries == null) "文章未能保存到本机，当前仍可阅读，稍后可从云端记录重开。" else it.message) }
+    }
+    fun refreshHistory() {
+        viewModelScope.launch {
+            try {
+                val remote = api.videoHistory().documents
+                val entries = withContext(Dispatchers.IO) { articleStore.merge(remote) }
+                mutable.update { it.copy(history = mergeStudyHistory(it.history, entries), historyError = "") }
+            } catch (error: CancellationException) { throw error }
+            catch (_: Exception) { mutable.update { it.copy(historyError = "暂时无法同步云端记录，仍可打开本机保存的文章。") } }
+        }
+    }
+    fun openArticle(id: String) = runAction {
+        val cached = examples.firstOrNull { it.id == id } ?: withContext(Dispatchers.IO) { articleStore.document(id) }
+        val document = cached ?: api.videoDocument(id).document
+        rememberDocument(document, true)
+        updateSession { it.copy(documentId = document.id) }
+        mutable.update { it.copy(document = document, candidates = null) }
+    }
+    private suspend fun attempt(notify: Boolean = true, action: suspend () -> Unit) {
         try { action() } catch (error: CancellationException) { throw error }
-        catch (error: Exception) { mutable.update { it.copy(message = errorMessage(error)) } }
+        catch (error: Exception) { mutable.update { if (notify) it.copy(message = errorMessage(error)) else it.copy(health = errorMessage(error)) } }
     }
     private fun runAction(action: suspend () -> Unit) {
         if (mutable.value.busy) return
         mutable.update { it.copy(busy = true, message = "") }
-        viewModelScope.launch { try { attempt(action) } finally { mutable.update { it.copy(busy = false) } } }
+        viewModelScope.launch { try { attempt(action = action) } finally { mutable.update { it.copy(busy = false) } } }
     }
     fun search(query: String) = runAction {
         require(query.isNotBlank()) { "请先输入视频标题或链接" }
@@ -131,6 +178,7 @@ class VideoStudyLiveModel(context: Context, private val api: PlatypusApi = ApiFa
     fun uploadSubtitle(title: String, subtitle: String) = openDocument(mapOf("source" to "upload", "title" to title.ifBlank { "导入字幕" }, "subtitle" to subtitle))
     private fun openDocument(body: Map<String, String>) = runAction {
         val document = api.createVideoDocument(body).document
+        rememberDocument(document, true)
         updateSession { it.copy(documentId = document.id) }
         mutable.update { it.copy(document = document, candidates = null) }
     }
@@ -148,6 +196,7 @@ class VideoStudyLiveModel(context: Context, private val api: PlatypusApi = ApiFa
         updateSession { it.copy(pending = PendingVideoImport(UUID.randomUUID().toString(), groupId, it.draft)) }
     }
     fun message(text: String) { mutable.update { it.copy(message = text) } }
+    fun dismissCandidates() { mutable.update { it.copy(candidates = null) } }
     private fun errorMessage(error: Exception): String {
         if (error is HttpException) {
             return runCatching { Gson().fromJson(error.response()?.errorBody()?.string(), Map::class.java)["error"] as? String }.getOrNull()

@@ -52,6 +52,7 @@ class VideoStudyLiveTest {
             requests += exchange.requestURI.path to body
             val response = when (exchange.requestURI.path) {
                 "/api/video-study/status" -> """{"workerReady":true,"captionsConfigured":true,"groups":[]}"""
+                "/api/video-study/history" -> """{"documents":[{"id":"doc-one","title":"English","channel":"Test","duration":"01:00","status":"ready","sentenceCount":1,"isExample":false}]}"""
                 "/api/video-study/search" -> """{"candidates":[{"id":"abcdefghijk","title":"English","channel":"Test","duration":"01:00"}]}"""
                 "/api/video-study/imports", "/api/video-study/imports/job-one", "/api/video-study/imports/job-one/retry" -> """{"job":{"id":"job-one","status":"partial","groupName":"视频词库","items":[{"word":"curious","status":"failed","error":"超时"}]}}"""
                 else -> """{"document":{"id":"doc-one","title":"English","channel":"Test","duration":"01:00","status":"translating","sentences":[{"id":"sentence-1","time":"00:00","english":"Stay curious.","chinese":"","translationStatus":"pending"}]}}"""
@@ -64,6 +65,7 @@ class VideoStudyLiveTest {
         try {
             val api = Retrofit.Builder().baseUrl("http://127.0.0.1:${server.address.port}/").addConverterFactory(GsonConverterFactory.create()).build().create(PlatypusApi::class.java)
             assertTrue(api.videoStatus().workerReady)
+            assertEquals("doc-one", api.videoHistory().documents.single().id)
             assertEquals("abcdefghijk", api.videoSearch(mapOf("query" to "English")).candidates.single().id)
             assertEquals("translating", api.createVideoDocument(mapOf("videoId" to "abcdefghijk")).document.status)
             assertEquals("pending", api.videoDocument("doc-one").document.sentences.single().translationStatus)

@@ -37,7 +37,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -82,25 +81,7 @@ private val DemoGroups = listOf(
 
 @Composable
 fun VideoStudyScreen(groups: List<WordGroup>, onImported: () -> Unit = {}) {
-    var demo by rememberSaveable { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 17.dp), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = { demo = false }) { Text(if (!demo) "● 真实视频" else "真实视频") }
-            TextButton(onClick = { demo = true }) { Text(if (demo) "● 离线演示" else "离线演示") }
-        }
-        Box(Modifier.weight(1f)) {
-            if (demo) VideoStudyOfflineScreen(groups) else VideoStudyLiveScreen(groups, onImported)
-        }
-    }
-}
-
-@Composable
-private fun VideoStudyOfflineScreen(groups: List<WordGroup>) {
-    val context = LocalContext.current
-    val documents = remember(context) { loadDemoVideoDocuments(context) }
-    val store = remember(context) { VideoStudyDraftStore(context) }
-    val initialDraft = remember(store) { store.load() }
-    VideoStudyDemoContent(documents, groups, initialDraft, onDraftChange = store::save)
+    VideoStudyLiveScreen(groups, onImported)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -366,10 +347,10 @@ fun VideoDraftPanel(
 
     Column(Modifier.fillMaxWidth().heightIn(max = 720.dp).padding(horizontal = 20.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("待收藏区 · ${draft.size} 词", style = MaterialTheme.typography.headlineSmall)
+            Text("${if (live) "缓存区" else "待收藏区"} · ${draft.size} 词", style = MaterialTheme.typography.headlineSmall)
             TextButton(onClick = onClose) { Text("关闭") }
         }
-        Text(if (live) "草稿保存在当前设备，提交后任务在服务器继续。" else "草稿保存在当前设备，模拟结果不写入真实词库。", color = PlatypusColors.Muted, style = MaterialTheme.typography.bodySmall)
+        if (!live) Text("草稿保存在当前设备，模拟结果不写入真实词库。", color = PlatypusColors.Muted, style = MaterialTheme.typography.bodySmall)
         LazyColumn(
             modifier = Modifier.fillMaxWidth().weight(1f, fill = false).testTag("video-draft-list"),
             contentPadding = PaddingValues(vertical = 14.dp),
@@ -474,14 +455,12 @@ fun VideoDraftPanel(
     )
 }
 
-@Preview(name = "视频学词 · 手机阅读", widthDp = 390, heightDp = 844, showBackground = true)
 @Composable
 private fun VideoStudyReadingPreview() {
     val documents = loadDemoVideoDocuments(LocalContext.current)
     PlatypusTheme { VideoStudyDemoContent(documents, initialDraft = listOf(DraftWord("resilient"), DraftWord("remarkable"))) }
 }
 
-@Preview(name = "视频学词 · 待收藏面板", widthDp = 390, heightDp = 720, showBackground = true)
 @Composable
 private fun VideoStudyDraftPreview() {
     PlatypusTheme {

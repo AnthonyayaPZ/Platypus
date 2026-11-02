@@ -2,7 +2,7 @@
 
 ## 当前交付边界
 
-Web、Android 和服务端代码已接通相同 API，保留独立离线演示。2026-11-02 已部署到既有阿里云系统服务，数据库迁移、字幕导入后的真实 LLM 翻译、后台收藏均已验收。服务器直连 YouTube 的 TLS 连接被重置，因此 YouTube 搜索/下载尚不可用，仍需要合适的字幕服务出站代理。详见 [`deployments/2026-11-02.md`](deployments/2026-11-02.md)。
+Web、Android 和服务端代码已接通相同 API。当前界面不再显示演示模式切换，内置文章统一收进“学习记录”。2026-11-02 已部署到既有阿里云系统服务，数据库迁移、字幕导入后的真实 LLM 翻译、后台收藏均已验收。服务器直连 YouTube 的 TLS 连接被重置，因此 YouTube 搜索/下载尚不可用，仍需要合适的字幕服务出站代理。详见 [`deployments/2026-11-02.md`](deployments/2026-11-02.md)。
 
 ## 服务与数据
 
@@ -92,6 +92,7 @@ npx vinext dev --port 3100
 | 路径 | 用途 |
 | --- | --- |
 | `GET /api/video-study/status` | 后台心跳、字幕配置、可选词库 |
+| `GET /api/video-study/history` | 所有已保存字幕文档的历史摘要，包含内置文章；无需新增迁移 |
 | `POST /api/video-study/search` | `{query}`，返回最多五个候选 |
 | `POST /api/video-study/documents` | `{videoId}`，或 `{source:"upload",title,subtitle}` |
 | `GET /api/video-study/documents/:id` | 文档及逐句翻译状态 |

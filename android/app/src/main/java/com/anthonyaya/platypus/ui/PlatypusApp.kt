@@ -75,7 +75,7 @@ fun PlatypusApp(
             }
         },
         topBar = {
-            MobileHeader(
+            if (state.tab != MainTab.Video) MobileHeader(
                 due = state.totalDue,
                 onBrandClick = { viewModel.selectTab(MainTab.Search) },
             )
