@@ -4,6 +4,9 @@ import android.content.Context
 import androidx.compose.runtime.*
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.sp
 import androidx.test.core.app.ApplicationProvider
 import com.anthonyaya.platypus.ui.theme.PlatypusTheme
 import com.anthonyaya.platypus.ui.videostudy.*
@@ -18,6 +21,18 @@ import org.robolectric.annotation.Config
 @Config(sdk = [35])
 class VideoStudyReaderTest {
     @get:Rule val compose = createComposeRule()
+
+    @Test fun readingTypographyUsesLargeTitleSmallerEnglishAndLargerTranslation() {
+        val article = loadDemoVideoDocuments(ApplicationProvider.getApplicationContext()).first()
+        compose.setContent { PlatypusTheme { VideoStudyReaderContent(VideoLiveState(document = article)) } }
+        fun size(text: String) = mutableListOf<TextLayoutResult>().also { results ->
+            compose.onNodeWithText(text, substring = false, useUnmergedTree = true)
+                .performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> action(results) }
+        }.single().layoutInput.style.fontSize
+        assertEquals(28.sp, size(article.title))
+        assertEquals(17.sp, size("Small"))
+        assertEquals(15.sp, size(article.sentences.first().chinese))
+    }
 
     @Test fun readingStaysCompactAndSearchAndDraftExpandOnlyOnTap() {
         val documents = loadDemoVideoDocuments(ApplicationProvider.getApplicationContext())

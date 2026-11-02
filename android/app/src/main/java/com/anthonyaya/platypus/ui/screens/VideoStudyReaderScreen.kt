@@ -121,7 +121,7 @@ fun VideoStudyReaderContent(state: VideoLiveState, initialGroups: List<WordGroup
             item {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Column(Modifier.weight(1f)) {
-                        Text(document?.title ?: "视频学词", fontFamily = FontFamily.Serif, fontSize = 23.sp, lineHeight = 29.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        Text(document?.title ?: "视频学词", fontFamily = FontFamily.Serif, fontSize = 28.sp, lineHeight = 35.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
                         if (!document?.duration.isNullOrBlank()) Text(document?.duration.orEmpty(), color = PlatypusColors.Muted, style = MaterialTheme.typography.labelSmall)
                     }
                     TextButton(onClick = { panel = "history"; actions.refreshHistory() }, contentPadding = PaddingValues(horizontal = 4.dp), modifier = Modifier.testTag("video-open-history")) { Text("↶ 学习记录", fontSize = 12.sp) }

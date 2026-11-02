@@ -299,16 +299,16 @@ internal fun SubtitleSentenceCard(
                             shape = RoundedCornerShape(6.dp),
                         ) {
                             Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text(token.text, fontFamily = FontFamily.Serif, fontSize = 19.sp, lineHeight = 25.sp)
+                                Text(token.text, fontFamily = FontFamily.Serif, fontSize = 17.sp, lineHeight = 23.sp)
                                 if (isSelected) Text("✓", fontSize = 10.sp, color = Color(0xFF4F7A59))
                             }
                         }
                     } else if (token.text.isNotBlank()) {
-                        Text(token.text.trim(), modifier = Modifier.padding(top = 10.dp), fontFamily = FontFamily.Serif, fontSize = 20.sp)
+                        Text(token.text.trim(), modifier = Modifier.padding(top = 10.dp), fontFamily = FontFamily.Serif, fontSize = 17.sp, lineHeight = 23.sp)
                     }
                 }
             }
-            if (showTranslation) Text(sentence.chinese.ifBlank { if (sentence.translationStatus == "failed") "本句翻译失败，可在上方重试。" else "中文翻译等待中…" }, color = Color(0xFF728278), style = MaterialTheme.typography.bodyMedium)
+            if (showTranslation) Text(sentence.chinese.ifBlank { if (sentence.translationStatus == "failed") "本句翻译失败，可在上方重试。" else "中文翻译等待中…" }, color = Color(0xFF728278), style = MaterialTheme.typography.bodyMedium, fontSize = 15.sp, lineHeight = 24.sp)
         }
     }
 }
