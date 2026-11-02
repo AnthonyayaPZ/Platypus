@@ -245,7 +245,7 @@ test("uncertain segment refinement failure falls back safely and translation ret
   } finally { await db.close(); }
 });
 
-test("a refinement outage stops further semantic requests instead of timing out once per paragraph", async () => {
+test("a refinement outage stops after at most two in-flight requests instead of timing out per paragraph", async () => {
   const { db, store } = await database();
   try {
     const text = Array(40).fill("practice").join(" ");
@@ -256,7 +256,7 @@ test("a refinement outage stops further semantic requests instead of timing out 
       refineCuts: async () => { calls++; throw new DictionaryGenerationError("upstream"); },
       translate: async (sentences) => new Map(sentences.map((sentence) => [sentence.id, "译文"])),
     });
-    assert.equal(calls, 1);
+    assert.equal(calls, 2);
     assert.equal((await store.document("youtube-abcdefghijk-en"))?.status, "ready");
   } finally { await db.close(); }
 });

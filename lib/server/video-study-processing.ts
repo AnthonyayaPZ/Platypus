@@ -38,17 +38,24 @@ async function processDocument(store: VideoStudyStore, job: ClaimedJob, deps: Pr
   const refinement = readingRefinementRequests(document.sentences);
   const refinedCuts = new Map<string, number[]>();
   let refinementFailures = 0;
-  for (let index = 0; index < refinement.length; index += 5) {
+  for (let index = 0; index < refinement.length; index += 10) {
     await store.renew(job);
-    try {
-      for (const [id, cuts] of await deps.refineCuts(refinement.slice(index, index + 5))) refinedCuts.set(id, cuts);
-      refinementFailures = 0;
-    } catch (error) {
-      console.warn("Subtitle cut refinement unavailable; using rule boundaries");
-      refinementFailures++;
-      // Do not spend one timeout for every paragraph during an outage.
-      if (!(error instanceof DictionaryGenerationError) || error.code !== "invalid-response" || refinementFailures >= 2) break;
+    const batches = [refinement.slice(index, index + 5), refinement.slice(index + 5, index + 10)].filter((batch) => batch.length);
+    const results = await Promise.allSettled(batches.map((batch) => deps.refineCuts(batch)));
+    let stop = false;
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        for (const [id, cuts] of result.value) refinedCuts.set(id, cuts);
+        refinementFailures = 0;
+      } else {
+        console.warn("Subtitle cut refinement unavailable; using rule boundaries");
+        refinementFailures++;
+        // At most two in-flight requests; do not repeat a timeout for every
+        // paragraph if the provider is unavailable.
+        if (!(result.reason instanceof DictionaryGenerationError) || result.reason.code !== "invalid-response" || refinementFailures >= 2) stop = true;
+      }
     }
+    if (stop) break;
   }
   let sentences: SubtitleSentence[] = segmentSubtitlesForReading(document.sentences, refinedCuts).map((sentence) => sentence.chinese ? { ...sentence, translationStatus: "ready" } : { ...sentence, translationStatus: "pending", translationError: "" });
   await store.updateDocument(job, { ...document, status: "translating", sentences, error: "" });
