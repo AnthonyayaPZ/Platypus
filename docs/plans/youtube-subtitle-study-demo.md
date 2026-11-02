@@ -1,6 +1,6 @@
 # 视频字幕学词：Web 与 Android Demo 计划
 
-状态：第一阶段交互 Demo 已完成；后续确认开始开发真实链路，第二阶段本地代码与自动化验证已完成，待服务器部署和真实外部服务验收。部署步骤见 `../video-study-deployment.md`。
+状态：两端开发与自动化验证已完成，2026-11-02 已部署服务器；字幕导入、真实 LLM 翻译和后台收藏已验收。服务器直连 YouTube 被重置，视频搜索/下载等待出站代理配置。部署步骤见 `../video-study-deployment.md`。
 
 ## 第一阶段交付记录
 
@@ -19,8 +19,8 @@
 - Web/服务端 18 项、字幕服务 5 项、Android 12 项测试通过；TypeScript、ESLint、Web 生产构建、Android Lint/APK 构建通过。Compose Preview 继续可用，未做实体手机安装验收。
 - Web 浏览器已检查 390px 手机和桌面布局、真实草稿编辑/刷新恢复及服务不可用提示；截图为 `outputs/video-study/web-v2-mobile.png` 和 `web-v2-desktop.png`。
 - 新 APK 为 `android/app/build/outputs/apk/debug/platypus-video-study.apk`，默认仍连接 `http://139.224.55.132:3000/`。如改用 Caddy 入口需要重新指定构建地址。
-- 联网视频搜索已验证成功；当前网络的字幕请求被 YouTube 要求登录确认，未绕过。真实 LLM、阿里云部署以及 Docker 容器构建/启动尚未实测。
-- 未提交/推送 Git，未变更公网服务与正式数据。
+- 初期本地联网搜索验证成功，但本地字幕请求被要求登录，未绕过；线上已验证真实 LLM 翻译与后台收藏，YouTube 直连连接被重置。未采用 Docker 容器部署。
+- 代码和部署配置已提交并推送 GitHub；线上迁移只新增表，原学习数据比对保持不变。当前部署记录见 `../deployments/2026-11-02.md`。
 
 ## 目标与当前约束
 
