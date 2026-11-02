@@ -3,11 +3,73 @@ import json
 import threading
 import urllib.error
 import urllib.request
+import subprocess
 from unittest.mock import patch
 import server
 
 
 class CaptionServiceTests(unittest.TestCase):
+    def test_service_proxy_overrides_inherited_host_proxy_without_cli_secrets(self):
+        def run(args, stdout, stderr, **kwargs):
+            self.assertNotIn("http://user:private@127.0.0.1:17890", args)
+            self.assertEqual(kwargs["env"]["https_proxy"], "http://user:private@127.0.0.1:17890")
+            self.assertNotIn("HTTPS_PROXY", kwargs["env"])
+            self.assertEqual(kwargs["env"]["NO_PROXY"], "localhost,127.0.0.1,::1")
+            stdout.write(b'{"id":"abcdefghijk"}')
+            return subprocess.CompletedProcess(args, 0)
+
+        with patch.dict(server.os.environ, {"CAPTIONS_PROXY": "http://user:private@127.0.0.1:17890", "https_proxy": "http://wrong:7890", "HTTPS_PROXY": "http://wrong:7890", "NO_PROXY": "*"}), patch.object(server.subprocess, "run", side_effect=run):
+            self.assertEqual(server.run_ytdlp("abcdefghijk")["id"], "abcdefghijk")
+
+    def test_no_service_proxy_does_not_inherit_host_proxy(self):
+        def run(args, stdout, stderr, **kwargs):
+            self.assertNotIn("https_proxy", kwargs["env"])
+            self.assertNotIn("HTTPS_PROXY", kwargs["env"])
+            stdout.write(b'{}')
+            return subprocess.CompletedProcess(args, 0)
+
+        with patch.dict(server.os.environ, {"CAPTIONS_PROXY": "", "https_proxy": "http://wrong:7890"}), patch.object(server.subprocess, "run", side_effect=run):
+            server.run_ytdlp("abcdefghijk")
+
+    def test_invalid_proxy_is_reported_without_leaking_credentials(self):
+        for proxy in ("socks5://user:private@localhost:1", "http://user:private@localhost:no-port", "file:///private", "http://localhost:80/?token=private"):
+            with patch.dict(server.os.environ, {"CAPTIONS_PROXY": proxy}):
+                with self.assertRaises(server.CaptionError) as error:
+                    server.caption_proxy()
+                self.assertNotIn("private", str(error.exception))
+                self.assertEqual(error.exception.status, 503)
+
+    def test_failures_distinguish_network_login_and_rate_limit(self):
+        cases = [("Sign in to confirm you're not a bot", 422, "登录验证"),
+                 ("HTTP Error 429: Too many requests", 429, "过于频繁"),
+                 ("ProxyError: connection refused", 503, "代理无法连接"),
+                 ("Connection reset by peer", 502, "网络请求失败"),
+                 ("Private video", 422, "账号权限")]
+        for detail, status, message in cases:
+            error = server.ytdlp_error(detail.lower(), True)
+            self.assertEqual(error.status, status)
+            self.assertIn(message, str(error))
+
+    def test_subtitle_access_denial_and_rate_limit_remain_distinct(self):
+        url = "https://www.youtube.com/api/timedtext?v=abcdefghijk"
+        for status, expected_status in ((403, 422), (429, 429)):
+            with patch.object(server.urllib.request.OpenerDirector, "open", side_effect=urllib.error.HTTPError(url, status, "private signed request", {}, None)):
+                with self.assertRaises(server.CaptionError) as error:
+                    server.download_json3(url)
+                self.assertEqual(error.exception.status, expected_status)
+                self.assertNotIn("private signed request", str(error.exception))
+
+    def test_ytdlp_error_never_exposes_raw_diagnostics(self):
+        def run(args, stdout, stderr, **kwargs):
+            stderr.write(b"ERROR: ProxyError connection refused https://user:private@internal/")
+            return subprocess.CompletedProcess(args, 1)
+
+        with patch.dict(server.os.environ, {"CAPTIONS_PROXY": "http://localhost:17890"}), patch.object(server.subprocess, "run", side_effect=run):
+            with self.assertRaises(server.CaptionError) as error:
+                server.run_ytdlp("abcdefghijk")
+            self.assertEqual(error.exception.status, 503)
+            self.assertNotIn("private", str(error.exception))
+
     def test_internal_http_requires_token_and_returns_caption_contract(self):
         token = "test-internal-token-1234567890"
         http = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)

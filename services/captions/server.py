@@ -52,9 +52,14 @@ def run_ytdlp(target, flat=False):
         args += ["--flat-playlist", "--playlist-end", "5"]
     args += ["--", target]
     env = os.environ.copy()
-    proxy = env.get("CAPTIONS_PROXY", "")
+    proxy = caption_proxy()
+    # urllib/yt-dlp prefer lower-case proxy variables. Do not let an inherited
+    # host-wide value override this service's explicit egress configuration.
+    for key in ("http_proxy", "https_proxy", "all_proxy", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        env.pop(key, None)
     if proxy:
-        env.update(HTTP_PROXY=proxy, HTTPS_PROXY=proxy, ALL_PROXY=proxy)
+        env.update(http_proxy=proxy, https_proxy=proxy, all_proxy=proxy)
+        env.update(no_proxy="localhost,127.0.0.1,::1", NO_PROXY="localhost,127.0.0.1,::1")
     try:
         with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
             result = subprocess.run(args, stdout=output, stderr=errors, timeout=35 if flat else 90, env=env, check=False)
@@ -64,14 +69,40 @@ def run_ytdlp(target, flat=False):
             if result.returncode:
                 errors.seek(0)
                 detail = errors.read(32_000).decode("utf-8", errors="replace").lower()
-                if any(word in detail for word in ("private video", "sign in", "unavailable", "members-only", "not available")):
-                    raise CaptionError("视频不可用、需要登录或当前网络无法访问，请更换视频或手动导入字幕", 422)
-                raise CaptionError("YouTube 请求失败，请检查服务器网络或稍后重试")
+                raise ytdlp_error(detail, bool(proxy))
             return json.load(output)
     except subprocess.TimeoutExpired:
         raise CaptionError("获取视频信息超时，请检查服务器网络或稍后重试", 504)
     except (OSError, json.JSONDecodeError):
         raise CaptionError("字幕下载工具不可用或返回内容无效")
+
+
+def caption_proxy():
+    proxy = os.getenv("CAPTIONS_PROXY", "").strip()
+    if proxy:
+        try:
+            parsed = urllib.parse.urlparse(proxy)
+            valid = parsed.scheme in ("http", "https") and bool(parsed.hostname) and (parsed.port is None or 1 <= parsed.port <= 65535) and parsed.path in ("", "/") and not parsed.query and not parsed.fragment
+        except ValueError:
+            valid = False
+        if not valid:
+            # Never include the supplied value: it may contain credentials.
+            raise CaptionError("字幕服务代理配置无效，请由管理员检查 CAPTIONS_PROXY（仅支持 HTTP/HTTPS 代理）", 503)
+    return proxy
+
+
+def ytdlp_error(detail, proxied):
+    if "not a bot" in detail or "confirm you’re not" in detail or "confirm you're not" in detail:
+        return CaptionError("YouTube 要求登录验证，当前无法自动获取此视频的字幕；请导入 SRT / VTT，或稍后重试", 422)
+    if "429" in detail or "too many requests" in detail:
+        return CaptionError("YouTube 请求过于频繁，请稍后重试或导入 SRT / VTT", 429)
+    if any(word in detail for word in ("private video", "sign in", "unavailable", "members-only", "not available")):
+        return CaptionError("该视频不可用或需要账号权限，请选择其他公开视频或导入 SRT / VTT", 422)
+    if "proxy" in detail or "connection refused" in detail:
+        return CaptionError("字幕服务出站代理无法连接，请由管理员检查代理是否运行", 503) if proxied else CaptionError("服务器无法连接 YouTube，请由管理员检查网络并配置字幕服务出站代理", 503)
+    if any(word in detail for word in ("timed out", "timeout", "connection reset", "network is unreachable", "name resolution", "unable to download")):
+        return CaptionError("服务器到 YouTube 的网络请求失败，请由管理员检查字幕服务代理；也可导入 SRT / VTT", 502)
+    return CaptionError("YouTube 视频信息获取失败，请稍后重试或导入 SRT / VTT")
 
 
 def format_duration(seconds):
@@ -114,10 +145,8 @@ class SafeRedirect(urllib.request.HTTPRedirectHandler):
 def download_json3(url):
     if not valid_caption_url(url):
         raise CaptionError("字幕下载地址无效")
-    proxy = os.getenv("CAPTIONS_PROXY", "")
-    handlers = [SafeRedirect()]
-    if proxy:
-        handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    proxy = caption_proxy()
+    handlers = [SafeRedirect(), urllib.request.ProxyHandler({"http": proxy, "https": proxy} if proxy else {})]
     opener = urllib.request.build_opener(*handlers)
     try:
         with opener.open(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=25) as response:
@@ -125,6 +154,12 @@ def download_json3(url):
         if len(content) > 3_000_000:
             raise CaptionError("字幕文件过大，请选择较短的视频", 422)
         return json.loads(content)
+    except urllib.error.HTTPError as error:
+        if error.code == 429:
+            raise CaptionError("YouTube 字幕请求过于频繁，请稍后重试或导入 SRT / VTT", 429)
+        if error.code in (401, 403):
+            raise CaptionError("YouTube 拒绝了字幕访问，请稍后重试或导入 SRT / VTT", 422)
+        raise CaptionError("字幕下载失败，请稍后重试或手动导入 SRT / VTT")
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
         raise CaptionError("字幕下载失败，请稍后重试或手动导入 SRT / VTT")
 

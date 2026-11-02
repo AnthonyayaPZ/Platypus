@@ -1,0 +1,26 @@
+[Unit]
+Description=Platypus captions-only loopback outbound proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/.local/share/platypus/captions-proxy
+ExecStart=/root/.local/share/platypus/captions-proxy/CrashCore -d /root/.local/share/platypus/captions-proxy -f /root/.local/share/platypus/captions-proxy/config.yaml
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/root/.local/share/platypus/captions-proxy
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+BindReadOnlyPaths=/etc/platypus-resolv.conf:/etc/resolv.conf
+MemoryMax=192M
+MemorySwapMax=0
+CPUQuota=40%
+TasksMax=96
+
+[Install]
+WantedBy=multi-user.target

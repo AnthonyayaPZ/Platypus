@@ -42,4 +42,5 @@ next-env.d.ts
 /outputs/
 /work/
 /services/**/__pycache__/
+/scripts/ops/__pycache__/
 /.venv*/
