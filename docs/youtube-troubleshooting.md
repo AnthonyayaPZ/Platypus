@@ -3,9 +3,9 @@
 ## 2026-11-02：两层独立故障
 
 1. **服务器出站网络**：直连 `www.youtube.com:443` 出现连接重置或超时。原 ShellCrash 服务在重启后未运行，旧代理端口也没有监听。服务配置存在不代表可以访问 YouTube。
-2. **YouTube 访问验证**：复用运营者已有的代理节点、通过字幕专用本机代理访问后，YouTube 首页返回 HTTP 200，标题搜索返回 5 个真实候选。但对 `o_XVt5rdpFY` 提取字幕时，yt-dlp 明确返回 `Sign in to confirm you're not a bot`。因此只验收了搜索恢复，不能称字幕下载已完全修复。
+2. **YouTube 访问验证**：复用运营者已有的代理节点、通过字幕专用本机代理访问后，YouTube 首页返回 HTTP 200，标题搜索返回 5 个真实候选，但字幕提取返回 `Sign in to confirm you're not a bot`。随后运营者明确提供 YouTube 专用登录 Cookie 文件；服务器使用该会话已成功提取 `o_XVt5rdpFY` 的英文字幕（213 个片段）。这次单视频成功不代表所有视频始终可下载。
 
-没有通过切换伪装客户端、浏览器 Cookie 抽取、验证码绕过或禁用证书校验处理第二层限制。不要自动高频重试；没有英文字幕、账号权限不足、访问验证和网络故障应分别报告。
+没有自动抽取浏览器 Cookie、绕过验证码或禁用证书校验。会话由运营者手动提供，用于其授权访问；不要自动高频重试。没有英文字幕、账号权限不足、访问验证和网络故障应分别报告。
 
 ## 本次修复
 
@@ -28,8 +28,15 @@
 
 ## 剩余限制如何处理
 
-- 若提示登录验证：当前版本不接收或自动抽取个人 Cookie。需要运营者先确认平台允许的授权访问方式，再单独设计会话凭据管理；不能保证登录后即可稳定自动下载。
+- 若提示登录验证：本版允许运营者在服务器私有目录配置 YouTube 专用 Netscape Cookie 文件，但不提供公网 Cookie 上传接口，也不自动抽取浏览器会话。不能保证登录后所有视频均可下载。
 - 有自己视频的管理权限时，可以评估官方 YouTube Data API；它不是任意公开视频字幕的通用下载接口。
 - 立即可用的方式是导入自己有权使用的 SRT/VTT，后续分句、翻译、选词和批量收藏仍正常工作。
+
+## 运营者提供 Cookie 后的配置
+
+- 文件仅存放在 `/etc/platypus-secrets/youtube.cookies.txt`，父目录权限 700、文件权限 600，不在源码目录，也不在版本归档或 Git 中。
+- 可选 `deploy/systemd/70-caption-cookies.conf` 使用 `LoadCredential` 将文件只读交给字幕服务。`CAPTIONS_COOKIES_FILE` 仅指向文件，不包含 Cookie 内容，不传给 Web 或 Android。
+- 服务检查格式、大小、有效期和域名，仅允许 YouTube 域 Cookie；拒绝其它站点数据。yt-dlp 每次使用独立的临时副本，结束自动清理，不回写运营者原文件；字幕文件请求复用同一次元信息请求更新后的会话及 User-Agent。
+- Cookie 过期需运营者正常登录并更新服务器源文件，再重启字幕服务；不应把文件粘贴进聊天、提交仓库或输出到日志。使用专用账号，注意平台规则和账号受限风险。
 
 依据：[yt-dlp 网络选项](https://github.com/yt-dlp/yt-dlp#network-options)、[yt-dlp FAQ](https://github.com/yt-dlp/yt-dlp/wiki/FAQ)、[YouTube captions.download 权限要求](https://developers.google.com/youtube/v3/docs/captions/download)。

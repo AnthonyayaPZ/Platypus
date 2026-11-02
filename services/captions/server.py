@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import hmac
+import http.cookiejar
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -12,7 +14,9 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+import warnings
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 MAX_SECONDS = max(60, min(int(os.getenv("VIDEO_STUDY_MAX_SECONDS", "3600")), 7200))
@@ -46,10 +50,59 @@ def video_id_from_input(value):
     return candidate
 
 
-def run_ytdlp(target, flat=False):
+def caption_cookies():
+    """Read the operator-provided, YouTube-only credential without logging it."""
+    path = os.getenv("CAPTIONS_COOKIES_FILE", "").strip()
+    jar = http.cookiejar.MozillaCookieJar()
+    if not path:
+        return jar
+    try:
+        file = Path(path)
+        info = file.stat()
+        if not file.is_absolute() or not stat.S_ISREG(info.st_mode) or info.st_size > 128_000:
+            raise ValueError()
+        if os.name == "posix" and info.st_mode & 0o077:
+            raise ValueError()
+        with warnings.catch_warnings():
+            # http.cookiejar can include a malformed source line in warnings.
+            warnings.simplefilter("ignore")
+            jar.load(str(file), ignore_discard=True, ignore_expires=False)
+        if not len(jar) or any(cookie.domain.lstrip(".").lower() != "youtube.com" and not cookie.domain.lstrip(".").lower().endswith(".youtube.com") for cookie in jar):
+            raise ValueError()
+    except (OSError, ValueError, http.cookiejar.LoadError):
+        raise CaptionError("YouTube 登录文件无效、已过期或权限不安全，请由管理员重新配置", 503) from None
+    return jar
+
+
+def run_ytdlp(target, flat=False, cookie_jar=None):
+    # yt-dlp updates its cookie jar on exit. Work on a private per-request copy,
+    # never the read-only systemd credential or a shared mutable cookie file.
+    jar = cookie_jar if cookie_jar is not None else caption_cookies()
+    with tempfile.TemporaryDirectory(prefix="platypus-captions-") as directory:
+        cookie_file = None
+        if len(jar):
+            cookie_file = str(Path(directory) / "cookies.txt")
+            with open(cookie_file, "x", encoding="utf-8"):
+                pass
+            os.chmod(cookie_file, 0o600)
+            jar.save(cookie_file, ignore_discard=True, ignore_expires=False)
+        result = _run_ytdlp(target, flat, cookie_file)
+        if cookie_file:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                try:
+                    jar.load(cookie_file, ignore_discard=True, ignore_expires=False)
+                except (OSError, ValueError, http.cookiejar.LoadError):
+                    raise CaptionError("YouTube 登录会话更新失败，请重新配置登录文件", 503) from None
+        return result
+
+
+def _run_ytdlp(target, flat, cookie_file):
     args = [sys.executable, "-m", "yt_dlp", "--ignore-config", "--no-warnings", "--skip-download", "--no-playlist", "--dump-single-json", "--socket-timeout", "12", "--retries", "1", "--extractor-retries", "1", "--js-runtimes", "node", "--no-remote-components"]
     if flat:
         args += ["--flat-playlist", "--playlist-end", "5"]
+    if cookie_file:
+        args += ["--cookies", cookie_file]
     args += ["--", target]
     env = os.environ.copy()
     proxy = caption_proxy()
@@ -142,14 +195,17 @@ class SafeRedirect(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def download_json3(url):
+def download_json3(url, cookie_jar=None, user_agent="Mozilla/5.0"):
     if not valid_caption_url(url):
         raise CaptionError("字幕下载地址无效")
     proxy = caption_proxy()
-    handlers = [SafeRedirect(), urllib.request.ProxyHandler({"http": proxy, "https": proxy} if proxy else {})]
+    jar = cookie_jar if cookie_jar is not None else caption_cookies()
+    handlers = [SafeRedirect(), urllib.request.ProxyHandler({"http": proxy, "https": proxy} if proxy else {}), urllib.request.HTTPCookieProcessor(jar)]
     opener = urllib.request.build_opener(*handlers)
     try:
-        with opener.open(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=25) as response:
+        if not isinstance(user_agent, str) or len(user_agent) > 1000 or "\r" in user_agent or "\n" in user_agent:
+            user_agent = "Mozilla/5.0"
+        with opener.open(urllib.request.Request(url, headers={"User-Agent": user_agent}), timeout=25) as response:
             content = response.read(3_000_001)
         if len(content) > 3_000_000:
             raise CaptionError("字幕文件过大，请选择较短的视频", 422)
@@ -180,7 +236,8 @@ def json3_cues(payload):
 def captions(video_id):
     if not isinstance(video_id, str) or not VIDEO_ID.fullmatch(video_id):
         raise CaptionError("无效的视频 ID", 400)
-    info = run_ytdlp(f"https://www.youtube.com/watch?v={video_id}")
+    jar = caption_cookies()
+    info = run_ytdlp(f"https://www.youtube.com/watch?v={video_id}", cookie_jar=jar)
     if info.get("is_live") or int(info.get("duration") or 0) > MAX_SECONDS:
         raise CaptionError(f"请选择非直播且不超过 {MAX_SECONDS // 60} 分钟的视频", 422)
     for collection in (info.get("subtitles") or {}, info.get("automatic_captions") or {}):
@@ -188,7 +245,7 @@ def captions(video_id):
         for language in languages:
             track = next((track for track in collection[language] if track.get("ext") == "json3"), None)
             if track:
-                cues = json3_cues(download_json3(track.get("url", "")))
+                cues = json3_cues(download_json3(track.get("url", ""), cookie_jar=jar, user_agent=(info.get("http_headers") or {}).get("User-Agent", "Mozilla/5.0")))
                 if cues:
                     return {"video": candidate(info), "cues": cues, "language": language}
     raise CaptionError("该视频没有可用的英文字幕或英文自动字幕，请选择其他视频或导入 SRT / VTT", 422)

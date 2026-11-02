@@ -3,18 +3,18 @@ import { generationErrorMessage, translateSubtitleSentences } from "../llm";
 import { cuesToSentences, parseSubtitleFile } from "../subtitles";
 import type { SubtitleSentence, WordSource } from "../video-study";
 import { fetchYouTubeCaptions } from "./captions-client";
-import { getOrGenerateDictionaryEntry } from "./dictionary-service";
+import { getOrGenerateDictionaryEntries } from "./dictionary-service";
 import { VideoStudyError } from "./sql";
 import { VideoStudyStore, type ClaimedJob, type DocumentInput } from "./video-study-store";
 
 export type ProcessingDependencies = {
   fetchCaptions: typeof fetchYouTubeCaptions;
   translate: (sentences: { id: string; english: string }[]) => Promise<Map<string, string>>;
-  ensureWord: (word: string) => Promise<unknown>;
+  ensureWords: (words: string[]) => Promise<Map<string, string | null>>;
   saveWord: (word: string, groupId: string, sources: WordSource[]) => Promise<void>;
 };
 
-const defaults: ProcessingDependencies = { fetchCaptions: fetchYouTubeCaptions, translate: translateSubtitleSentences, ensureWord: getOrGenerateDictionaryEntry, saveWord: saveWordToGroup };
+const defaults: ProcessingDependencies = { fetchCaptions: fetchYouTubeCaptions, translate: translateSubtitleSentences, ensureWords: getOrGenerateDictionaryEntries, saveWord: saveWordToGroup };
 const errorText = (error: unknown) => error instanceof VideoStudyError ? error.message : generationErrorMessage(error);
 
 async function processDocument(store: VideoStudyStore, job: ClaimedJob, deps: ProcessingDependencies) {
@@ -53,12 +53,20 @@ async function processDocument(store: VideoStudyStore, job: ClaimedJob, deps: Pr
 
 async function processImport(store: VideoStudyStore, job: ClaimedJob, deps: ProcessingDependencies) {
   const groupId = String(job.payload.groupId);
-  for (const item of await store.pendingItems(job)) {
+  const items = await store.pendingItems(job);
+  await store.renew(job);
+  for (const item of items) await store.updateItem(job, item.word, "processing");
+  let prepared: Map<string, string | null>;
+  try { prepared = items.length ? await deps.ensureWords(items.map((item) => item.word)) : new Map(); }
+  catch (error) { prepared = new Map(items.map((item) => [item.word, errorText(error)])); }
+  for (const item of items) {
     await store.renew(job);
-    await store.updateItem(job, item.word, "processing");
+    const preparationError = prepared.get(item.word);
+    if (!prepared.has(item.word) || preparationError !== null) {
+      await store.updateItem(job, item.word, "failed", preparationError || "LLM 未返回该单词的完整词义，请重试");
+      continue;
+    }
     try {
-      await deps.ensureWord(item.word);
-      await store.renew(job);
       await deps.saveWord(item.word, groupId, item.sources);
       await store.updateItem(job, item.word, "success");
     } catch (error) {

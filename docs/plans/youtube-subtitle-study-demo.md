@@ -1,6 +1,6 @@
 # 视频字幕学词：Web 与 Android Demo 计划
 
-状态：两端开发与自动化验证已完成，2026-11-02 已部署服务器；字幕导入、真实 LLM 翻译和后台收藏已验收。字幕专用代理已验证标题搜索恢复；自动字幕下载仍受 YouTube 登录验证限制，尚未完全验收。详见 `../youtube-troubleshooting.md` 与 `../video-study-deployment.md`。
+状态：两端开发与自动化验证已完成，2026-11-02 已部署服务器；字幕导入、真实 LLM 翻译和后台收藏已验收。字幕专用代理已恢复标题搜索；运营者提供 Cookie 后，服务器已验证一个测试视频的英文字幕提取。批量词条生成现支持一批一次请求，不再逐词调用模型。详见 `../youtube-troubleshooting.md` 与 `../video-study-deployment.md`。
 
 ## 第一阶段交付记录
 

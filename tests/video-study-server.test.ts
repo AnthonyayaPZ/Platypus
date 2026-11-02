@@ -4,7 +4,9 @@ import test from "node:test";
 import { createServer } from "node:http";
 import { PGlite } from "@electric-sql/pglite";
 import { saveWordWithClient } from "../db/learning";
-import { DictionaryGenerationError, translateSubtitleSentences } from "../lib/llm";
+import { DictionaryGenerationError, generateDictionaryEntries, translateSubtitleSentences } from "../lib/llm";
+import { getOrGenerateDictionaryEntries } from "../lib/server/dictionary-service";
+import type { WordEntry } from "../lib/dictionary";
 import { cuesToSentences, parseSubtitleFile } from "../lib/subtitles";
 import { youtubeVideoId } from "../lib/server/captions-client";
 import { readJsonBody } from "../lib/server/video-study-http";
@@ -29,7 +31,11 @@ async function database() {
     try { await saveWordWithClient(sql, word, groupId, sources); await sql.query("COMMIT"); }
     catch (error) { await sql.query("ROLLBACK"); throw error; }
   };
-  return { db, sql, store: new VideoStudyStore(sql), ensureWord, saveWord };
+  const ensureWords = async (words: string[]) => {
+    for (const word of words) await ensureWord(word);
+    return new Map(words.map((word) => [word, null]));
+  };
+  return { db, sql, store: new VideoStudyStore(sql), ensureWord, ensureWords, saveWord };
 }
 
 test("history includes every stored article and built-in articles without duplicating or resetting them", async () => {
@@ -87,17 +93,24 @@ test("durable import jobs are idempotent, retry failed words only, and preserve 
     await assert.rejects(() => store.enqueueImport("request-123456789", "test-group", [{ word: "different", sources: [] }]));
     const calls: string[] = [];
     let fail = true;
-    const generate = async (word: string) => { calls.push(word); if (word === "fragile" && fail) throw new DictionaryGenerationError("upstream"); await ensureWord(word); };
+    const batches: string[][] = [];
+    const generate = async (words: string[]) => {
+      batches.push(words);
+      const results = new Map<string, string | null>();
+      for (const word of words) { calls.push(word); if (word === "fragile" && fail) results.set(word, "LLM 请求失败"); else { await ensureWord(word); results.set(word, null); } }
+      return results;
+    };
     const job = (await store.claim("worker-one"))!;
-    await processVideoStudyJob(store, job, { ensureWord: generate, saveWord });
+    await processVideoStudyJob(store, job, { ensureWords: generate, saveWord });
     assert.equal((await store.job(first.id))?.status, "partial");
     assert.equal((await sql.query("SELECT note,ease,repetitions,next_review FROM user_words WHERE word='resilient'")).rows[0].note, "我的原笔记");
     assert.equal((await sql.query("SELECT repetitions FROM user_words WHERE word='resilient'")).rows[0].repetitions, 4);
     fail = false;
     await store.retryImport(first.id);
-    await processVideoStudyJob(store, (await store.claim("worker-two"))!, { ensureWord: generate, saveWord });
+    await processVideoStudyJob(store, (await store.claim("worker-two"))!, { ensureWords: generate, saveWord });
     assert.equal((await store.job(first.id))?.status, "completed");
     assert.equal(calls.filter((word) => word === "resilient").length, 1);
+    assert.deepEqual(batches, [["fragile", "resilient"], ["fragile"]]);
     assert.equal((await sql.query("SELECT * FROM group_words")).rows.length, 2);
     assert.equal((await sql.query("SELECT COUNT(*)::int AS count FROM video_study_jobs")).rows[0].count, 1);
   } finally { await db.close(); }
@@ -130,14 +143,14 @@ test("subtitle translation keeps English after partial failure and retries only 
 });
 
 test("expired leases resume processing items without allowing a stale worker to overwrite progress", async () => {
-  const { db, sql, store, ensureWord, saveWord } = await database();
+  const { db, sql, store, ensureWords, saveWord } = await database();
   try {
     const job = await store.enqueueImport("resume-1234567890", "test-group", [{ word: "curious", sources: [] }]);
     const stale = (await store.claim("old-worker"))!;
     await store.updateItem(stale, "curious", "processing");
     await sql.query("UPDATE video_study_jobs SET lease_until='1970-01-01T00:00:00.000Z' WHERE id=$1", [job.id]);
     const resumed = (await store.claim("new-worker"))!;
-    await processVideoStudyJob(store, resumed, { ensureWord, saveWord });
+    await processVideoStudyJob(store, resumed, { ensureWords, saveWord });
     await store.updateItem(stale, "curious", "failed", "stale failure");
     assert.equal((await store.job(job.id))?.items[0].status, "success");
     assert.equal((await store.job(job.id))?.status, "completed");
@@ -145,13 +158,13 @@ test("expired leases resume processing items without allowing a stale worker to 
 });
 
 test("collected source context is taken from the stored subtitle, not client-provided text", async () => {
-  const { db, sql, store, ensureWord, saveWord } = await database();
+  const { db, sql, store, ensureWords, saveWord } = await database();
   try {
     const document = await store.enqueueDocument({ source: "upload", title: "Original title", subtitle: "1\n00:00:01,000 --> 00:00:03,000\nStay curious.\n" });
     await processVideoStudyJob(store, (await store.claim("translator"))!, { translate: async (sentences) => new Map(sentences.map((sentence) => [sentence.id, "保持好奇心。 "])) });
     const words = validateImportWords([{ word: "curious", sources: [{ documentId: document.id, sentenceId: "sentence-1", title: "forged", english: "forged" }] }]);
     await store.enqueueImport("sources-request-123", "test-group", words);
-    await processVideoStudyJob(store, (await store.claim("collector"))!, { ensureWord, saveWord });
+    await processVideoStudyJob(store, (await store.claim("collector"))!, { ensureWords, saveWord });
     const sources = (await sql.query("SELECT title,time,english FROM video_word_sources")).rows;
     assert.deepEqual(sources, [{ title: "Original title", time: "00:01", english: "Stay curious." }]);
     await saveWord("curious", "test-group", words[0].sources);
@@ -188,4 +201,111 @@ test("LLM translation responses align by sentence ID and reject omissions or dup
     if (hyphenKey !== undefined) process.env["API-KEY"] = hyphenKey;
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+function batchEntry(word: string): WordEntry {
+  return {
+    word, phonetic: "/test/", part: "n.", meaning: "中文释义", summary: "核心含义", example: "A natural example.", exampleZh: "自然的例句。",
+    synonyms: ["near", "close"], antonyms: ["far", "remote"],
+    relations: [
+      { word: "near", type: "synonym", comparison: "共同点和差异", usage: "适用场景" },
+      { word: "close", type: "synonym", comparison: "共同点和差异", usage: "适用场景" },
+      { word: "far", type: "antonym", comparison: "相反的含义", usage: "适用场景" },
+      { word: "remote", type: "antonym", comparison: "相反的含义", usage: "适用场景" },
+    ],
+  };
+}
+
+test("30 dictionary entries use one HTTP request and malformed words stay isolated", async () => {
+  const requests: { max_tokens: number; messages: { content: string }[] }[] = [];
+  const words = Array.from({ length: 30 }, (_, index) => `word${String.fromCharCode(97 + Math.floor(index / 26))}${String.fromCharCode(97 + index % 26)}`);
+  let entries: unknown[] = words.map(batchEntry).reverse();
+  let finishReason = "stop";
+  const server = createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    requests.push(JSON.parse(body));
+    response.setHeader("Content-Type", "application/json");
+    response.end(JSON.stringify({ choices: [{ finish_reason: finishReason, message: { content: JSON.stringify({ entries }) } }] }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const previous = Object.fromEntries(["API_KEY", "API-KEY", "BASE_URL", "MODEL_NAME"].map((key) => [key, process.env[key]]));
+  delete process.env["API-KEY"];
+  Object.assign(process.env, { API_KEY: "local-test", BASE_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, MODEL_NAME: "local-test" });
+  try {
+    const result = await generateDictionaryEntries(words);
+    assert.equal(requests.length, 1);
+    assert.deepEqual(JSON.parse(requests[0].messages[1].content).words, words);
+    assert.equal(requests[0].max_tokens, 30_000);
+    assert.equal(result.size, 30);
+    for (const [word, entry] of result) { assert.ok(!(entry instanceof Error)); assert.equal(entry.word, word); assert.equal(entry.relations.length, 4); }
+    entries = [batchEntry("alpha")];
+    const omitted = await generateDictionaryEntries(["alpha", "beta"]);
+    assert.ok(!(omitted.get("alpha") instanceof Error));
+    assert.ok(omitted.get("beta") instanceof DictionaryGenerationError);
+    entries = [batchEntry("alpha"), batchEntry("alpha"), batchEntry("beta")];
+    const duplicated = await generateDictionaryEntries(["alpha", "beta"]);
+    assert.ok(duplicated.get("alpha") instanceof DictionaryGenerationError);
+    assert.ok(!(duplicated.get("beta") instanceof Error));
+    entries = [{ ...batchEntry("alpha"), relations: [] }, batchEntry("beta")];
+    const invalid = await generateDictionaryEntries(["alpha", "beta"]);
+    assert.ok(invalid.get("alpha") instanceof DictionaryGenerationError);
+    assert.ok(!(invalid.get("beta") instanceof Error));
+    entries = [batchEntry("unexpected")];
+    await assert.rejects(() => generateDictionaryEntries(["alpha"]), DictionaryGenerationError);
+    entries = [batchEntry("alpha")];
+    finishReason = "length";
+    await assert.rejects(() => generateDictionaryEntries(["alpha"]), DictionaryGenerationError);
+    const count = requests.length;
+    await assert.rejects(() => generateDictionaryEntries(["invalid input"]), DictionaryGenerationError);
+    assert.equal(requests.length, count);
+  } finally {
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("bulk imports generate only missing entries once and retry only the failed subset", async () => {
+  const { db, sql, store, ensureWord, saveWord } = await database();
+  try {
+    await ensureWord("cached");
+    const requests: string[][] = [];
+    const ensureWords = (words: string[]) => getOrGenerateDictionaryEntries(words, {
+      initialize: async () => {},
+      existingWords: async (input) => new Set((await sql.query("SELECT word FROM dictionary_entries WHERE word=ANY($1::text[])", [input])).rows.map((row) => String(row.word))),
+      withLocks: async (_words, action) => action(),
+      generate: async (input) => {
+        requests.push(input);
+        return new Map(input.map((word) => [word, word === "beta" && requests.length === 1 ? new DictionaryGenerationError("invalid-response") : batchEntry(word)]));
+      },
+      persist: async (entry) => { await ensureWord(entry.word); },
+    });
+    const first = await store.enqueueImport("bulk-request-123456789", "test-group", ["cached", "alpha", "beta"].map((word) => ({ word, sources: [] })));
+    await processVideoStudyJob(store, (await store.claim("bulk-one"))!, { ensureWords, saveWord });
+    assert.equal((await store.job(first.id))?.status, "partial");
+    assert.deepEqual(requests, [["alpha", "beta"]]);
+    assert.equal((await sql.query("SELECT * FROM group_words")).rows.length, 2);
+    await store.retryImport(first.id);
+    await processVideoStudyJob(store, (await store.claim("bulk-two"))!, { ensureWords, saveWord });
+    assert.equal((await store.job(first.id))?.status, "completed");
+    assert.deepEqual(requests, [["alpha", "beta"], ["beta"]]);
+    assert.equal((await sql.query("SELECT * FROM group_words")).rows.length, 3);
+    const cached = await ensureWords(["alpha", "beta", "cached"]);
+    assert.ok([...cached.values()].every((value) => value === null));
+    assert.equal(requests.length, 2);
+  } finally { await db.close(); }
+});
+
+test("a failed bulk request preserves cache hits without per-word LLM fallback", async () => {
+  let calls = 0;
+  const results = await getOrGenerateDictionaryEntries(["cached", "alpha", "beta"], {
+    initialize: async () => {}, existingWords: async () => new Set(["cached"]),
+    withLocks: async (_words, action) => action(),
+    generate: async () => { calls++; throw new DictionaryGenerationError("upstream"); },
+    persist: async () => { throw new Error("Should not save missing results"); },
+  });
+  assert.equal(calls, 1);
+  assert.equal(results.get("cached"), null);
+  assert.ok(results.get("alpha"));
+  assert.ok(results.get("beta"));
 });

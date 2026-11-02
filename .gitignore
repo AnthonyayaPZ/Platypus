@@ -43,4 +43,8 @@ next-env.d.ts
 /work/
 /services/**/__pycache__/
 /scripts/ops/__pycache__/
+*.cookies.txt
+*_cookies.txt
+cookies.txt
+/secrets/
 /.venv*/

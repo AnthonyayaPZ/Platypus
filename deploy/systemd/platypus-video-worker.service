@@ -12,7 +12,7 @@ EnvironmentFile=/etc/platypus-video-study.env
 ExecStart=/usr/bin/npm run worker:video-study
 Restart=on-failure
 RestartSec=5
-TimeoutStopSec=150
+TimeoutStopSec=210
 NoNewPrivileges=true
 PrivateTmp=true
 

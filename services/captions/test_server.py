@@ -4,11 +4,53 @@ import threading
 import urllib.error
 import urllib.request
 import subprocess
+import os
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 import server
 
 
 class CaptionServiceTests(unittest.TestCase):
+    def test_cookie_file_is_private_youtube_only_and_never_modified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.txt"
+            content = "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t2147483647\tSID\tprivate-test-value\n"
+            source.write_text(content, encoding="utf-8")
+            source.chmod(0o600)
+            seen = []
+
+            def run(args, stdout, stderr, **kwargs):
+                copy = Path(args[args.index("--cookies") + 1])
+                seen.append(copy)
+                self.assertNotEqual(copy, source)
+                self.assertIn("private-test-value", copy.read_text())
+                self.assertNotIn("private-test-value", " ".join(args))
+                stdout.write(b'{}')
+                return subprocess.CompletedProcess(args, 0)
+
+            with patch.dict(server.os.environ, {"CAPTIONS_COOKIES_FILE": str(source.resolve())}), patch.object(server.subprocess, "run", side_effect=run):
+                server.run_ytdlp("abcdefghijk")
+            self.assertEqual(source.read_text(), content)
+            self.assertFalse(seen[0].exists())
+
+    def test_invalid_or_other_site_cookies_are_rejected_without_secret_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.txt"
+            for content in ("private-malformed-value", "# Netscape HTTP Cookie File\n.bank.example\tTRUE\t/\tTRUE\t2147483647\tSID\tprivate-value\n"):
+                source.write_text(content, encoding="utf-8")
+                source.chmod(0o600)
+                with patch.dict(server.os.environ, {"CAPTIONS_COOKIES_FILE": str(source.resolve())}):
+                    with self.assertRaises(server.CaptionError) as error:
+                        server.caption_cookies()
+                    self.assertNotIn("private", str(error.exception))
+                    self.assertEqual(error.exception.status, 503)
+            if os.name == "posix":
+                source.chmod(0o644)
+                with patch.dict(server.os.environ, {"CAPTIONS_COOKIES_FILE": str(source.resolve())}):
+                    with self.assertRaises(server.CaptionError):
+                        server.caption_cookies()
+
     def test_service_proxy_overrides_inherited_host_proxy_without_cli_secrets(self):
         def run(args, stdout, stderr, **kwargs):
             self.assertNotIn("http://user:private@127.0.0.1:17890", args)
@@ -109,7 +151,8 @@ class CaptionServiceTests(unittest.TestCase):
     def test_human_english_subtitles_are_preferred_over_automatic(self):
         with patch.object(server, "run_ytdlp", return_value={"id": "abcdefghijk", "duration": 60, "subtitles": {"en": [{"ext": "json3", "url": "manual"}]}, "automatic_captions": {"en": [{"ext": "json3", "url": "automatic"}]}}), patch.object(server, "download_json3", return_value={"events": [{"tStartMs": 1000, "dDurationMs": 2000, "segs": [{"utf8": "Hello "}, {"utf8": "world."}]}]}) as download:
             result = server.captions("abcdefghijk")
-            download.assert_called_once_with("manual")
+            self.assertEqual(download.call_args.args, ("manual",))
+            self.assertIn("cookie_jar", download.call_args.kwargs)
             self.assertEqual(result["cues"][0], {"startMs": 1000, "endMs": 3000, "text": "Hello world."})
 
     def test_missing_subtitles_report_an_explicit_failure(self):
