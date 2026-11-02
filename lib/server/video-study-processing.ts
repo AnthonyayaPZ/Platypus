@@ -1,6 +1,7 @@
 import { saveWordToGroup } from "../../db/learning";
-import { generationErrorMessage, translateSubtitleSentences } from "../llm";
+import { generationErrorMessage, refineSubtitleReadingCuts, translateSubtitleSentences, type SubtitleTranslationInput } from "../llm";
 import { cuesToSentences, parseSubtitleFile } from "../subtitles";
+import { originalSentenceFor, readingRefinementRequests, segmentSubtitlesForReading } from "../subtitle-segmentation";
 import type { SubtitleSentence, WordSource } from "../video-study";
 import { fetchYouTubeCaptions } from "./captions-client";
 import { getOrGenerateDictionaryEntries } from "./dictionary-service";
@@ -9,35 +10,52 @@ import { VideoStudyStore, type ClaimedJob, type DocumentInput } from "./video-st
 
 export type ProcessingDependencies = {
   fetchCaptions: typeof fetchYouTubeCaptions;
-  translate: (sentences: { id: string; english: string }[]) => Promise<Map<string, string>>;
+  translate: (sentences: SubtitleTranslationInput[]) => Promise<Map<string, string>>;
+  refineCuts: typeof refineSubtitleReadingCuts;
   ensureWords: (words: string[]) => Promise<Map<string, string | null>>;
   saveWord: (word: string, groupId: string, sources: WordSource[]) => Promise<void>;
 };
 
-const defaults: ProcessingDependencies = { fetchCaptions: fetchYouTubeCaptions, translate: translateSubtitleSentences, ensureWords: getOrGenerateDictionaryEntries, saveWord: saveWordToGroup };
+const defaults: ProcessingDependencies = { fetchCaptions: fetchYouTubeCaptions, translate: translateSubtitleSentences, refineCuts: refineSubtitleReadingCuts, ensureWords: getOrGenerateDictionaryEntries, saveWord: saveWordToGroup };
 const errorText = (error: unknown) => error instanceof VideoStudyError ? error.message : generationErrorMessage(error);
 
 async function processDocument(store: VideoStudyStore, job: ClaimedJob, deps: ProcessingDependencies) {
   let document = (await store.document(job.documentId))!;
-  const input = job.payload as DocumentInput;
+  const input = job.payload as DocumentInput | { source: "stored" };
   if (!document.sentences.length) {
     await store.updateDocument(job, { status: "fetching", error: "" });
     const maximumSeconds = Math.max(60, Math.min(Number(process.env.VIDEO_STUDY_MAX_SECONDS) || 3600, 7200));
     if (input.source === "youtube") {
       const { video, cues } = await deps.fetchCaptions(input.videoId);
       document = { ...document, title: video.title, channel: video.channel, duration: video.duration, thumbnail: video.thumbnail, url: video.url, sentences: cuesToSentences(cues, maximumSeconds) };
-    } else {
+    } else if (input.source === "upload") {
       document = { ...document, title: input.title, channel: "手动导入字幕", sentences: cuesToSentences(parseSubtitleFile(input.subtitle), maximumSeconds) };
-    }
+    } else throw new VideoStudyError("没有已保存的字幕，请重新选择视频或导入字幕", 422);
   }
-  let sentences: SubtitleSentence[] = document.sentences.map((sentence) => sentence.chinese ? { ...sentence, translationStatus: "ready" } : { ...sentence, translationStatus: "pending", translationError: "" });
+  // Validate size before making model requests. Only uncertain cuts need help;
+  // clear punctuation/clause boundaries are resolved locally without an LLM.
+  segmentSubtitlesForReading(document.sentences);
+  const refinement = readingRefinementRequests(document.sentences);
+  const refinedCuts = new Map<string, number[]>();
+  for (let index = 0; index < refinement.length; index += 5) {
+    await store.renew(job);
+    try {
+      for (const [id, cuts] of await deps.refineCuts(refinement.slice(index, index + 5))) refinedCuts.set(id, cuts);
+    } catch { /* A refinement outage must not prevent bounded English reading. */ }
+  }
+  let sentences: SubtitleSentence[] = segmentSubtitlesForReading(document.sentences, refinedCuts).map((sentence) => sentence.chinese ? { ...sentence, translationStatus: "ready" } : { ...sentence, translationStatus: "pending", translationError: "" });
   await store.updateDocument(job, { ...document, status: "translating", sentences, error: "" });
   const pending = sentences.filter((sentence) => !sentence.chinese);
   for (let index = 0; index < pending.length; index += 10) {
     await store.renew(job);
     const chunk = pending.slice(index, index + 10);
     try {
-      const translations = await deps.translate(chunk.map(({ id, english }) => ({ id, english })));
+      const translations = await deps.translate(chunk.map((sentence) => {
+        const index = sentences.findIndex((item) => item.id === sentence.id);
+        return { id: sentence.id, english: sentence.english, context: originalSentenceFor(sentence, sentences).english,
+          ...(index > 0 ? { previousEnglish: sentences[index - 1].english } : {}),
+          ...(index + 1 < sentences.length ? { nextEnglish: sentences[index + 1].english } : {}) };
+      }));
       if (chunk.some((sentence) => !translations.get(sentence.id))) throw new Error("Missing translations");
       sentences = sentences.map((sentence) => translations.has(sentence.id) ? { ...sentence, chinese: translations.get(sentence.id)!, translationStatus: "ready", translationError: "" } : sentence);
     } catch (error) {

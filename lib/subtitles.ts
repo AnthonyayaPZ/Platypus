@@ -46,10 +46,11 @@ export function cuesToSentences(cues: CaptionCue[], maximumSeconds = 3600): Subt
   let buffer = "";
   let startMs = 0;
   let endMs = 0;
+  let readingBreaks: number[] = [];
   let previous: CaptionCue | null = null;
-  const emit = (english: string) => {
+  const emit = (english: string, breaks: number[] = []) => {
     if (!english.trim()) return;
-    sentences.push({ id: `sentence-${sentences.length + 1}`, time: formatTimestamp(startMs), startMs, endMs, english: english.trim(), chinese: "", translationStatus: "pending" });
+    sentences.push({ id: `sentence-${sentences.length + 1}`, time: formatTimestamp(startMs), startMs, endMs, english: english.trim(), chinese: "", translationStatus: "pending", ...(breaks.length ? { readingBreaks: breaks } : {}) });
   };
   for (const cue of sorted) {
     let text = cleanText(cue.text);
@@ -65,19 +66,25 @@ export function cuesToSentences(cues: CaptionCue[], maximumSeconds = 3600): Subt
     }
     previous = cue;
     if (!text) continue;
-    if (buffer && cue.startMs - endMs > 1800) { emit(buffer); buffer = ""; }
+    if (buffer && cue.startMs - endMs > 1800) { emit(buffer, readingBreaks); buffer = ""; readingBreaks = []; }
+    if (buffer && cue.startMs - endMs >= 450) readingBreaks.push(buffer.length + 1);
     if (!buffer) startMs = cue.startMs;
     endMs = cue.endMs;
     buffer = buffer ? `${buffer} ${text}` : text;
-    const parts = Array.from(segmenter.segment(buffer), (part) => part.segment.trim()).filter(Boolean);
+    const parts = Array.from(segmenter.segment(buffer), (part) => ({ text: part.segment.trim(), offset: part.index + part.segment.length - part.segment.trimStart().length })).filter((part) => part.text);
+    const pauses = readingBreaks;
     buffer = "";
+    readingBreaks = [];
     for (const [index, part] of parts.entries()) {
-      if (index < parts.length - 1 || /[.!?]["')\]]*$/.test(part) || part.length > 320) emit(part);
-      else buffer = part;
+      const breaks = pauses.filter((offset) => offset > part.offset && offset < part.offset + part.text.length).map((offset) => offset - part.offset);
+      // Keep a grammatical sentence intact for context. Extremely long,
+      // unpunctuated captions are bounded without reverting to 320-char cuts.
+      if (index < parts.length - 1 || /[.!?]["')\]]*$/.test(part.text) || part.text.length > 2400) emit(part.text, breaks);
+      else { buffer = part.text; readingBreaks = breaks; }
     }
     if (sentences.length > 600) throw new Error("字幕超过 600 句限制，请使用较短的视频");
   }
-  if (buffer) emit(buffer);
+  if (buffer) emit(buffer, readingBreaks);
   if (sentences.length > 600) throw new Error("字幕超过 600 句限制，请使用较短的视频");
   if (!sentences.length || sentences.reduce((sum, sentence) => sum + sentence.english.length, 0) > 120_000) throw new Error("字幕为空或文本过长");
   return sentences;

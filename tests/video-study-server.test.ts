@@ -4,7 +4,7 @@ import test from "node:test";
 import { createServer } from "node:http";
 import { PGlite } from "@electric-sql/pglite";
 import { saveWordWithClient } from "../db/learning";
-import { DictionaryGenerationError, generateDictionaryEntries, translateSubtitleSentences } from "../lib/llm";
+import { DictionaryGenerationError, generateDictionaryEntries, refineSubtitleReadingCuts, translateSubtitleSentences, type SubtitleTranslationInput } from "../lib/llm";
 import { getOrGenerateDictionaryEntries } from "../lib/server/dictionary-service";
 import type { WordEntry } from "../lib/dictionary";
 import { cuesToSentences, parseSubtitleFile } from "../lib/subtitles";
@@ -15,6 +15,7 @@ import { validateImportWords, VideoStudyStore } from "../lib/server/video-study-
 import type { SqlExecutor } from "../lib/server/sql";
 import { historyItem, mergeStudyHistory } from "../lib/video-study-history";
 import { exampleDocuments } from "../lib/video-study-examples";
+import { MAX_READING_WORDS, subtitleWordCount } from "../lib/subtitle-segmentation";
 
 async function database() {
   const db = new PGlite();
@@ -172,6 +173,72 @@ test("collected source context is taken from the stored subtitle, not client-pro
   } finally { await db.close(); }
 });
 
+test("existing articles upgrade once without redownloading or losing old drafts and complete source context", async () => {
+  const { db, sql, store, ensureWord, saveWord } = await database();
+  try {
+    const original = "If you want to remember new words, connect them with situations from your own life, and review them regularly instead of trying to memorize everything in a single sitting.";
+    const document = await store.enqueueDocument({ source: "youtube", videoId: "abcdefghijk" });
+    const oldJob = (await store.claim("old-worker"))!;
+    await store.updateDocument(oldJob, { title: "Saved article", status: "ready", sentences: [
+      { id: "sentence-1", time: "00:07", english: original, chinese: "原来完整的中文翻译。", translationStatus: "ready" },
+      { id: "sentence-2", time: "00:20", english: "Keep practicing.", chinese: "坚持练习。", translationStatus: "ready" },
+    ] });
+    await store.finish(oldJob, "completed");
+    await ensureWord("words");
+    const oldSource = { documentId: document.id, sentenceId: "sentence-1", title: "forged", english: "forged", time: "forged" };
+    await saveWord("words", "test-group", [oldSource]);
+    assert.equal((await store.queueReadingUpgrade(document.id)).queued, true);
+    assert.equal((await store.queueReadingUpgrade(document.id)).queued, false);
+    const calls: SubtitleTranslationInput[][] = [];
+    await processVideoStudyJob(store, (await store.claim("upgrade-worker"))!, {
+      fetchCaptions: async () => { throw new Error("Must not redownload"); },
+      translate: async (sentences) => { calls.push(sentences); return new Map(sentences.map((sentence) => [sentence.id, "对应短段翻译"])); },
+    });
+    const updated = (await store.document(document.id))!;
+    assert.equal(updated.status, "ready");
+    assert.equal(updated.sentences.length, 3);
+    for (const segment of updated.sentences) {
+      for (const key of ["id", "time", "english", "chinese"] as const) assert.equal(typeof segment[key], "string");
+    }
+    assert.equal(updated.sentences[0].id, "sentence-1");
+    assert.equal(updated.sentences[2].chinese, "坚持练习。");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].length, 2);
+    assert.ok(calls[0].every((sentence) => sentence.context === original && subtitleWordCount(sentence.english) <= MAX_READING_WORDS));
+    assert.equal(calls[0][0].nextEnglish, updated.sentences[1].english);
+    assert.equal((await store.queueReadingUpgrade(document.id)).queued, false);
+    // Both an old draft and a new segment resolve to the same canonical source.
+    await saveWord("words", "test-group", [oldSource, { ...oldSource, sentenceId: updated.sentences[1].id }]);
+    assert.deepEqual((await sql.query("SELECT sentence_id,english FROM video_word_sources")).rows, [{ sentence_id: "sentence-1", english: original }]);
+    assert.equal((await sql.query("SELECT COUNT(*)::int AS count FROM video_study_jobs")).rows[0].count, 1);
+  } finally { await db.close(); }
+});
+
+test("uncertain segment refinement failure falls back safely and translation retry keeps final identifiers", async () => {
+  const { db, store } = await database();
+  try {
+    const text = Array(40).fill("practice").join(" ");
+    const document = await store.enqueueDocument({ source: "upload", title: "Unpunctuated", subtitle: `1\n00:00:00,000 --> 00:00:03,000\n${text}\n` });
+    let refinements = 0;
+    await processVideoStudyJob(store, (await store.claim("first"))!, {
+      refineCuts: async () => { refinements++; throw new DictionaryGenerationError("upstream"); },
+      translate: async () => { throw new DictionaryGenerationError("upstream"); },
+    });
+    const partial = (await store.document(document.id))!;
+    assert.equal(partial.status, "partial");
+    assert.ok(partial.sentences.every((sentence) => subtitleWordCount(sentence.english) <= MAX_READING_WORDS));
+    await store.retryDocument(document.id);
+    await processVideoStudyJob(store, (await store.claim("retry"))!, {
+      refineCuts: async () => { refinements++; throw new Error("Must not re-plan"); },
+      translate: async (sentences) => new Map(sentences.map((sentence) => [sentence.id, "译文"])),
+    });
+    const ready = (await store.document(document.id))!;
+    assert.equal(ready.status, "ready");
+    assert.equal(refinements, 1);
+    assert.deepEqual(ready.sentences.map((sentence) => sentence.id), partial.sentences.map((sentence) => sentence.id));
+  } finally { await db.close(); }
+});
+
 test("LLM translation responses align by sentence ID and reject omissions or duplicates", async () => {
   let translations: unknown[] = [{ id: "s2", chinese: "第二句" }, { id: "s1", chinese: "第一句" }];
   const server = createServer((request, response) => {
@@ -199,6 +266,30 @@ test("LLM translation responses align by sentence ID and reject omissions or dup
   } finally {
     for (const [name, value] of Object.entries(previous)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
     if (hyphenKey !== undefined) process.env["API-KEY"] = hyphenKey;
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("semantic refinement returns integer cut positions only and rejects mismatched responses", async () => {
+  let cuts: unknown[] = [{ id: "sentence-1", afterWords: [16, 28] }];
+  const server = createServer((request, response) => {
+    request.resume();
+    response.setHeader("Content-Type", "application/json");
+    response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ cuts }) } }] }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const previous = Object.fromEntries(["API_KEY", "API-KEY", "BASE_URL", "MODEL_NAME"].map((key) => [key, process.env[key]]));
+  delete process.env["API-KEY"];
+  Object.assign(process.env, { API_KEY: "local-test", BASE_URL: `http://127.0.0.1:${(server.address() as { port: number }).port}/v1`, MODEL_NAME: "local-test" });
+  try {
+    const input = [{ id: "sentence-1", english: Array(40).fill("practice").join(" "), words: Array(40).fill("practice"), suggestedCuts: [20] }];
+    assert.deepEqual((await refineSubtitleReadingCuts(input)).get("sentence-1"), [16, 28]);
+    for (const invalid of [[{ id: "sentence-1", afterWords: ["16"] }], [{ id: "unexpected", afterWords: [16] }], []]) {
+      cuts = invalid;
+      await assert.rejects(() => refineSubtitleReadingCuts(input), DictionaryGenerationError);
+    }
+  } finally {
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });

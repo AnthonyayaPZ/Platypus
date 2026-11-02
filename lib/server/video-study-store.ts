@@ -5,6 +5,7 @@ import { normalizeStudyWord, type DraftWord, type ImportItem, type SubtitleSente
 import { VideoStudyError, type SqlExecutor } from "./sql";
 import { exampleDocuments } from "../video-study-examples";
 import type { StudyHistoryItem } from "../video-study-history";
+import { needsReadingSegmentation } from "../subtitle-segmentation";
 
 export type DocumentInput = { source: "youtube"; videoId: string } | { source: "upload"; title: string; subtitle: string };
 export type ClaimedJob = { id: string; kind: "document" | "import"; documentId: string; payload: Record<string, unknown>; workerId: string };
@@ -60,7 +61,26 @@ export class VideoStudyStore {
        SELECT $5,$6,'document',id,$7::jsonb,$8,$4,$4 FROM document ON CONFLICT(request_key) DO NOTHING`,
       [id, input.source === "youtube" ? input.videoId : "", input.source === "upload" ? input.title : "正在获取字幕", timestamp, randomUUID(), `document:${id}`, JSON.stringify(input), hash(input)],
     );
-    return (await this.document(id))!;
+    return (await this.queueReadingUpgrade(id)).document;
+  }
+
+  /** Reuse cached English: never download an existing article just to split it. */
+  async queueReadingUpgrade(id: string): Promise<{ document: VideoStudyDocument; queued: boolean }> {
+    const document = await this.document(id);
+    if (!document) throw new VideoStudyError("字幕文档不存在", 404);
+    if (!document.sentences.length || !["ready", "partial", "failed"].includes(document.status ?? "") || !needsReadingSegmentation(document.sentences)) return { document, queued: false };
+    const timestamp = now();
+    const payload = { source: "stored" };
+    const { rows } = await this.sql.query(
+      `WITH job AS (
+         INSERT INTO video_study_jobs(id,request_key,kind,document_id,payload,payload_hash,status,created_at,updated_at)
+         VALUES($1,$2,'document',$3,$4::jsonb,$5,'queued',$6,$6)
+         ON CONFLICT(request_key) DO UPDATE SET status='queued',error='',worker_id='',lease_until='',updated_at=EXCLUDED.updated_at
+         WHERE video_study_jobs.status IN ('completed','partial','failed') RETURNING document_id
+       ) UPDATE video_study_documents SET status='queued',error='',updated_at=$6 WHERE id IN (SELECT document_id FROM job) RETURNING id`,
+      [randomUUID(), `document:${id}`, id, JSON.stringify(payload), hash(payload), timestamp],
+    );
+    return { document: (await this.document(id))!, queued: !!rows.length };
   }
 
   async retryDocument(id: string) {
