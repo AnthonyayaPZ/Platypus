@@ -1,0 +1,22 @@
+[Unit]
+Description=Platypus English caption service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/platypus-current
+EnvironmentFile=/etc/platypus-video-study.env
+Environment=CAPTIONS_BIND=127.0.0.1
+Environment=PORT=8080
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/root/.local/share/platypus/captions-venv/bin/python services/captions/server.py
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

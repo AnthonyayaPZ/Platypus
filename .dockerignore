@@ -8,6 +8,8 @@ dist
 .wrangler
 coverage
 outputs
+android
+services/captions/__pycache__
 work
 *.log
 .DS_Store

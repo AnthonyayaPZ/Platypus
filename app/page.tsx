@@ -4,8 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import type { WordEntry } from "../lib/dictionary";
 import type { RelationDetail } from "../lib/relations";
 import { getWordSuggestions, type WordSuggestion } from "../lib/word-suggestions";
+import VideoStudyDemo from "./components/VideoStudyWorkspace";
 
-type View = "search" | "review" | "cards" | "library";
+type View = "search" | "review" | "cards" | "library" | "video";
 type Group = { id: string; name: string; color: string; is_default: number; word_count: number; due_count: number };
 type WordMeta = { word: string; note: string; first_saved_at: string; updated_at: string; repetitions: number; next_review: string; last_reviewed: string | null; group_ids: string[] };
 type SavedWord = { word: string; group_id: string; added_at: string; note: string; first_saved_at: string; repetitions: number; next_review: string; last_reviewed: string | null; entry: WordEntry };
@@ -17,6 +18,7 @@ const navItems: { id: View; label: string; icon: string }[] = [
   { id: "search", label: "查单词", icon: "⌕" },
   { id: "review", label: "今日背诵", icon: "◎" },
   { id: "cards", label: "卡片学习", icon: "◇" },
+  { id: "video", label: "视频学词", icon: "▶" },
   { id: "library", label: "我的词库", icon: "▦" },
 ];
 
@@ -136,7 +138,7 @@ export default function Home() {
 
     <section className="workspace">
       <header className="mobile-header"><button className="brand" onClick={() => setView("search")}><span className="brand-mark"><span className="brand-eye" /></span><span><b>鸭嘴兽单词</b></span></button><span className="streak-pill">今日 {groups.reduce((sum, group) => sum + group.due_count, 0)} 词</span></header>
-      {loading ? <LoadingState /> : view === "search" ?
+      {view === "video" ? <VideoStudyDemo groups={groups} onImported={() => { void fetch("/api/state").then(async (response) => { if (response.ok) applyState(await response.json() as StatePayload); }).catch(() => setToast("收藏已完成，重新打开词库可刷新内容")); }} /> : loading ? <LoadingState /> : view === "search" ?
         <SearchView query={query} setQuery={setQuery} result={result} groups={groups} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} meta={result ? metaFor(result.word) : null} searching={searching} searchWord={searchWord} postAction={postAction} setToast={setToast} total={new Set(savedWords.map((item) => item.word)).size} due={groups.reduce((sum, group) => sum + group.due_count, 0)} setView={setView} />
         : view === "review" ? <ReviewView key={selectedGroup} groups={groups} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} postAction={postAction} setToast={setToast} />
         : view === "cards" ? <CardsView key={selectedGroup} groups={groups} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} words={groupWords} metaFor={metaFor} postAction={postAction} setToast={setToast} />

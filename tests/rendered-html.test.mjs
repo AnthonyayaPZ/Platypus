@@ -25,14 +25,16 @@ test("ships the product UI instead of the starter preview", async () => {
 });
 
 test("generates and caches dictionary misses on the server", async () => {
-  const [route, llm, runtime] = await Promise.all([
+  const [route, llm, runtime, service] = await Promise.all([
     readFile(new URL("app/api/search/route.ts", root), "utf8"),
     readFile(new URL("lib/llm.ts", root), "utf8"),
     readFile(new URL("db/runtime.ts", root), "utf8"),
+    readFile(new URL("lib/server/dictionary-service.ts", root), "utf8"),
   ]);
 
-  assert.match(route, /generateDictionaryEntry/);
-  assert.match(route, /source: "llm-generated"/);
+  assert.match(route, /getOrGenerateDictionaryEntry/);
+  assert.match(service, /generateDictionaryEntry/);
+  assert.match(service, /source: "llm-generated"/);
   assert.match(route, /\^\[a-z\]\[a-z'-\]/);
   assert.match(llm, /chat\/completions/);
   assert.match(llm, /API-KEY/);

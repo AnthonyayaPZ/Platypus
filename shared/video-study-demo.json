@@ -1,0 +1,30 @@
+{
+  "documents": [
+    {
+      "id": "demo-small-habits",
+      "title": "Small habits, lasting change",
+      "channel": "Platypus Studio · 自编演示素材",
+      "duration": "02:18",
+      "sentences": [
+        { "id": "habits-1", "time": "00:08", "english": "Small habits can create remarkable changes in our everyday lives.", "chinese": "小小的习惯可以给我们的日常生活带来显著的变化。" },
+        { "id": "habits-2", "time": "00:23", "english": "You don't need a perfect plan to begin; you need a practical first step.", "chinese": "开始不需要一个完美的计划，而需要务实的第一步。" },
+        { "id": "habits-3", "time": "00:41", "english": "A resilient learner stays curious, even when progress feels slow.", "chinese": "一个有韧性的学习者，即使感觉进步缓慢，也会保持好奇心。" },
+        { "id": "habits-4", "time": "01:02", "english": "Consistency matters more than intensity, because small actions build confidence.", "chinese": "坚持比强度更重要，因为小小的行动能够建立信心。" },
+        { "id": "habits-5", "time": "01:24", "english": "Try writing a vivid example whenever you discover an unfamiliar word.", "chinese": "每当你遇到一个不熟悉的单词，试着写下一个生动的例子。" },
+        { "id": "habits-6", "time": "01:49", "english": "Over time, these habits become a sustainable part of your learning journey.", "chinese": "随着时间推移，这些习惯会成为你学习旅程中可以持续的一部分。" }
+      ]
+    },
+    {
+      "id": "demo-curiosity",
+      "title": "Stay curious, keep learning",
+      "channel": "Platypus Studio · 自编演示素材",
+      "duration": "01:36",
+      "sentences": [
+        { "id": "curiosity-1", "time": "00:06", "english": "Curiosity helps us notice extraordinary details in ordinary places.", "chinese": "好奇心帮助我们在平凡的地方发现不平凡的细节。" },
+        { "id": "curiosity-2", "time": "00:22", "english": "Ask a thoughtful question instead of accepting the first explanation.", "chinese": "提出一个经过思考的问题，而不是直接接受第一个解释。" },
+        { "id": "curiosity-3", "time": "00:48", "english": "A resilient mind can adapt when new evidence challenges an old belief.", "chinese": "当新证据挑战旧观念时，有韧性的头脑能够做出调整。" },
+        { "id": "curiosity-4", "time": "01:11", "english": "You can turn a brief conversation into a meaningful learning experience.", "chinese": "你可以把一次简短的交谈变成一次有意义的学习经历。" }
+      ]
+    }
+  ]
+}

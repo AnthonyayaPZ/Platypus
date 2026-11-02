@@ -1,6 +1,6 @@
 # 鸭嘴兽单词（Platypus Words）
 
-鸭嘴兽单词是面向 Web 与后续 Android 客户端的个人单词本。当前 Web 版支持单词检索、LLM 补全与缓存、近反义词对比、个人笔记、分组收藏、间隔复习、三类练习题和卡片学习。
+鸭嘴兽单词是面向 Web 与原生 Android 客户端的个人单词本。当前支持单词检索、LLM 补全与缓存、近反义词对比、个人笔记、分组收藏、间隔复习、三类练习题和卡片学习。
 
 ## 架构
 
@@ -9,7 +9,7 @@ flowchart TB
   subgraph Client["客户端"]
     Web["Web 浏览器"]
     WordList["静态常用词表 · 前缀补全 · 拼写容错"]
-    Android["Android 客户端（后续）"]
+    Android["Android 客户端 · Kotlin / Compose"]
   end
 
   subgraph Server["云服务器 · Docker Compose"]
@@ -42,6 +42,9 @@ flowchart TB
 - React 19、TypeScript、Vinext、Vite
 - PostgreSQL 17、Drizzle ORM / Drizzle Kit、`pg`
 - Docker Compose、Caddy
+- Android：Kotlin、Jetpack Compose、Material 3、Retrofit
+
+Android 工程、运行方式与 APK 打包说明见 [`android/README.md`](android/README.md)。
 
 ## 本地开发
 
@@ -149,6 +152,22 @@ docker compose --env-file .env.production up -d --build
 
 建议至少保留 7 天备份，并定期在独立数据库中验证恢复流程。
 
+## 视频字幕学词
+
+入口是 Web/Android 的“视频学词”，也可直接打开 Web 的 `/video-study`。页面提供“真实视频”和“离线演示”两种独立模式：
+
+```powershell
+npx vinext dev --port 3100
+```
+
+访问 `http://localhost:3100/video-study`。真实模式支持标题/链接搜索、确认视频、获取英文字幕、逐句中文翻译和词块点选，也支持导入 SRT/VTT。待收藏区可以编辑、手动新增、去重和选择已有词库；点击“生成并收藏”后才按现有对比学习规则处理。任务保存在 PostgreSQL，页面关闭后后台继续；失败词保留并可单独重试。
+
+“离线演示”不需要数据库、字幕服务或 LLM，不会写入真实词库。Web 与 Android 共用 `shared/video-study-demo.json` 的自编双语样例，真实与演示草稿分开保存。
+
+真实功能需要新增数据库迁移、`captions` 字幕服务和 `video-worker` 后台任务进程。完整部署与验收步骤见 [`docs/video-study-deployment.md`](docs/video-study-deployment.md)。仍沿用个人共享工作区，不增加注册登录或用户隔离。
+
+Android 的电脑预览与构建说明见 [`android/README.md`](android/README.md)。
+
 ## API
 
 ### 单词检索
@@ -177,7 +196,7 @@ Content-Type: application/json
 
 ## 当前边界
 
-- 当前使用本地体验账号，尚未接入注册登录和正式多用户隔离。
+- 当前使用个人体验账号 `local-demo`，不启用注册登录与多用户隔离。
 - LLM 生成内容上线前仍需增加内容安全策略与质量抽检。
 - 发音使用浏览器 Speech Synthesis API。
-- Android 客户端尚未开发。
+- Android 客户端已覆盖核心学习流程；正式发布前仍需配置签名和生产 HTTPS 域名。

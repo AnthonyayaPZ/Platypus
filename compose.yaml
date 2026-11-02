@@ -28,6 +28,8 @@ services:
     image: platypus-words:local
     restart: unless-stopped
     env_file: ${ENV_FILE:-.env.production}
+    environment:
+      CAPTIONS_SERVICE_URL: http://captions:8080
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -38,6 +40,31 @@ services:
       interval: 15s
       timeout: 5s
       retries: 10
+
+  captions:
+    build: ./services/captions
+    restart: unless-stopped
+    env_file: ${ENV_FILE:-.env.production}
+    environment:
+      PORT: "8080"
+      CAPTIONS_BIND: 0.0.0.0
+    expose:
+      - "8080"
+
+  video-worker:
+    build: .
+    image: platypus-words:local
+    restart: unless-stopped
+    env_file: ${ENV_FILE:-.env.production}
+    environment:
+      CAPTIONS_SERVICE_URL: http://captions:8080
+    command: ["npm", "run", "worker:video-study"]
+    stop_grace_period: 120s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      captions:
+        condition: service_healthy
 
   caddy:
     image: caddy:2-alpine

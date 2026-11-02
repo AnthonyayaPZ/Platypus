@@ -1,4 +1,6 @@
 import { pool } from "../../../db/index";
+import { saveWordToGroup } from "../../../db/learning";
+import { VideoStudyError } from "../../../lib/server/sql";
 import {
   answerReviewTask,
   beginReviewSession,
@@ -126,29 +128,7 @@ export async function POST(request: Request) {
       if (!entryRes.rows.length) return Response.json({ error: "词汇不存在" }, { status: 404 });
       if (!groupRes.rows.length) return Response.json({ error: "单词分组不存在" }, { status: 404 });
 
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
-        await client.query(
-          `INSERT INTO user_words
-            (user_id, word, note, first_saved_at, updated_at, next_review)
-            VALUES ($1, $2, '', $3, $4, $5)
-            ON CONFLICT(user_id, word) DO UPDATE SET updated_at = EXCLUDED.updated_at`,
-          [DEMO_USER_ID, word, now, now, today()],
-        );
-        await client.query(
-          `INSERT INTO group_words (user_id, group_id, word, added_at)
-            VALUES ($1, $2, $3, $4)
-            ON CONFLICT DO NOTHING`,
-          [DEMO_USER_ID, payload.groupId, word, now],
-        );
-        await client.query("COMMIT");
-      } catch (e) {
-        await client.query("ROLLBACK");
-        throw e;
-      } finally {
-        client.release();
-      }
+      await saveWordToGroup(word, payload.groupId);
       return Response.json(await loadState());
     }
 
@@ -216,6 +196,7 @@ export async function POST(request: Request) {
 
     return Response.json({ error: "不支持的操作" }, { status: 400 });
   } catch (error) {
+    if (error instanceof VideoStudyError) return Response.json({ error: error.message }, { status: error.status });
     if ((error as { constraint?: string }).constraint === "word_groups_user_name_idx") {
       return Response.json({ error: "已存在同名词库" }, { status: 409 });
     }

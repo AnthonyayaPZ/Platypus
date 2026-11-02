@@ -1,0 +1,20 @@
+[Unit]
+Description=Platypus video vocabulary background worker
+After=network-online.target platypus-captions.service
+Wants=network-online.target platypus-captions.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/platypus-current
+EnvironmentFile=/root/Platypus/.env
+EnvironmentFile=/etc/platypus-video-study.env
+ExecStart=/usr/bin/npm run worker:video-study
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=150
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,5 +1,6 @@
-import { pgTable, text, integer, primaryKey, uniqueIndex, index } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, jsonb, primaryKey, uniqueIndex, index } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import type { SubtitleSentence, WordSource } from "../lib/video-study";
 
 export const dictionaryEntries = pgTable("dictionary_entries", {
   word: text("word").primaryKey(),
@@ -113,3 +114,58 @@ export const legacySavedWords = pgTable("saved_words", {
   nextReview: text("next_review").notNull(),
   lastReviewed: text("last_reviewed"),
 }, (table) => [primaryKey({ columns: [table.word, table.groupId] })]);
+
+export const videoStudyDocuments = pgTable("video_study_documents", {
+  id: text("id").primaryKey(),
+  videoId: text("video_id").notNull().default(""),
+  title: text("title").notNull().default("正在获取字幕"),
+  channel: text("channel").notNull().default(""),
+  duration: text("duration").notNull().default(""),
+  url: text("url").notNull().default(""),
+  thumbnail: text("thumbnail").notNull().default(""),
+  status: text("status").notNull().default("queued"),
+  sentences: jsonb("sentences").$type<SubtitleSentence[]>().notNull().default([]),
+  error: text("error").notNull().default(""),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const videoStudyJobs = pgTable("video_study_jobs", {
+  id: text("id").primaryKey(),
+  requestKey: text("request_key").notNull(),
+  kind: text("kind").notNull(),
+  status: text("status").notNull().default("queued"),
+  documentId: text("document_id"),
+  groupId: text("group_id").notNull().default(""),
+  groupName: text("group_name").notNull().default(""),
+  payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+  payloadHash: text("payload_hash").notNull(),
+  workerId: text("worker_id").notNull().default(""),
+  leaseUntil: text("lease_until").notNull().default(""),
+  error: text("error").notNull().default(""),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [uniqueIndex("video_study_jobs_request_idx").on(table.requestKey), index("video_study_jobs_queue_idx").on(table.status, table.leaseUntil)]);
+
+export const videoStudyJobItems = pgTable("video_study_job_items", {
+  jobId: text("job_id").notNull().references(() => videoStudyJobs.id, { onDelete: "cascade" }),
+  word: text("word").notNull(),
+  status: text("status").notNull().default("waiting"),
+  sources: jsonb("sources").$type<WordSource[]>().notNull().default([]),
+  error: text("error").notNull().default(""),
+}, (table) => [primaryKey({ columns: [table.jobId, table.word] })]);
+
+export const videoWordSources = pgTable("video_word_sources", {
+  groupId: text("group_id").notNull().references(() => wordGroups.id, { onDelete: "cascade" }),
+  word: text("word").notNull().references(() => dictionaryEntries.word, { onDelete: "cascade" }),
+  documentId: text("document_id").notNull().references(() => videoStudyDocuments.id, { onDelete: "cascade" }),
+  sentenceId: text("sentence_id").notNull(),
+  title: text("title").notNull(),
+  time: text("time").notNull(),
+  english: text("english").notNull(),
+}, (table) => [primaryKey({ columns: [table.groupId, table.word, table.documentId, table.sentenceId] })]);
+
+export const videoStudyWorkers = pgTable("video_study_workers", {
+  id: text("id").primaryKey(),
+  lastSeen: text("last_seen").notNull(),
+});
