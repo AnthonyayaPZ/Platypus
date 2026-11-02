@@ -1,4 +1,4 @@
-export type OriginalSubtitleSentence = { id: string; time: string; english: string; chinese: string; startMs?: number; endMs?: number; readingBreaks?: number[] };
+export type OriginalSubtitleSentence = { id: string; time: string; english: string; chinese: string; startMs?: number; endMs?: number; readingBreaks?: number[]; aliases?: string[] };
 export type SubtitleSentence = OriginalSubtitleSentence & {
   translationStatus?: "pending" | "ready" | "failed";
   translationError?: string;

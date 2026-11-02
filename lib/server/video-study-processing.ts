@@ -1,5 +1,5 @@
 import { saveWordToGroup } from "../../db/learning";
-import { generationErrorMessage, refineSubtitleReadingCuts, translateSubtitleSentences, type SubtitleTranslationInput } from "../llm";
+import { DictionaryGenerationError, generationErrorMessage, refineSubtitleReadingCuts, translateSubtitleSentences, type SubtitleTranslationInput } from "../llm";
 import { cuesToSentences, parseSubtitleFile } from "../subtitles";
 import { originalSentenceFor, readingRefinementRequests, segmentSubtitlesForReading } from "../subtitle-segmentation";
 import type { SubtitleSentence, WordSource } from "../video-study";
@@ -37,18 +37,26 @@ async function processDocument(store: VideoStudyStore, job: ClaimedJob, deps: Pr
   segmentSubtitlesForReading(document.sentences);
   const refinement = readingRefinementRequests(document.sentences);
   const refinedCuts = new Map<string, number[]>();
+  let refinementFailures = 0;
   for (let index = 0; index < refinement.length; index += 5) {
     await store.renew(job);
     try {
       for (const [id, cuts] of await deps.refineCuts(refinement.slice(index, index + 5))) refinedCuts.set(id, cuts);
-    } catch { /* A refinement outage must not prevent bounded English reading. */ }
+      refinementFailures = 0;
+    } catch (error) {
+      console.warn("Subtitle cut refinement unavailable; using rule boundaries");
+      refinementFailures++;
+      // Do not spend one timeout for every paragraph during an outage.
+      if (!(error instanceof DictionaryGenerationError) || error.code !== "invalid-response" || refinementFailures >= 2) break;
+    }
   }
   let sentences: SubtitleSentence[] = segmentSubtitlesForReading(document.sentences, refinedCuts).map((sentence) => sentence.chinese ? { ...sentence, translationStatus: "ready" } : { ...sentence, translationStatus: "pending", translationError: "" });
   await store.updateDocument(job, { ...document, status: "translating", sentences, error: "" });
   const pending = sentences.filter((sentence) => !sentence.chinese);
-  for (let index = 0; index < pending.length; index += 10) {
+  const translationBatchSize = pending.some((sentence) => sentence.readingVersion) ? 20 : 10;
+  for (let index = 0; index < pending.length; index += translationBatchSize) {
     await store.renew(job);
-    const chunk = pending.slice(index, index + 10);
+    const chunk = pending.slice(index, index + translationBatchSize);
     try {
       const translations = await deps.translate(chunk.map((sentence) => {
         const index = sentences.findIndex((item) => item.id === sentence.id);

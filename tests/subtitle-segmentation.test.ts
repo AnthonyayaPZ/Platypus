@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { cuesToSentences } from "../lib/subtitles";
-import { MAX_READING_WORDS, estimatedReadingRows, needsReadingSegmentation, originalSentenceFor, readingRefinementRequests, segmentSubtitlesForReading, splitReadingText, splitReadingTextAtCuts, subtitleWordCount } from "../lib/subtitle-segmentation";
+import { MAX_READING_WORDS, estimatedReadingRows, needsReadingSegmentation, originalSentenceFor, readingRefinementRequests, resolveOriginalSentence, segmentSubtitlesForReading, splitReadingText, splitReadingTextAtCuts, subtitleWordCount } from "../lib/subtitle-segmentation";
 import type { SubtitleSentence } from "../lib/video-study";
 
 const longSentence = "If you want to remember new words, connect them with situations from your own life, and review them regularly instead of trying to memorize everything in a single sitting.";
@@ -108,4 +108,18 @@ test("only uncertain boundaries ask for semantic help and model cuts cannot rewr
   assert.equal(withoutWhitespace(valid.map((segment) => segment.english).join("")), withoutWhitespace(english));
   const fallback = segmentSubtitlesForReading([source(english)], new Map([["sentence-1", [1]]]));
   assert.deepEqual(fallback, segmentSubtitlesForReading([source(english)]));
+});
+
+test("refining an older plan keeps retired segment aliases and reuses unchanged translations", () => {
+  const original = source(Array(40).fill("practice").join(" "));
+  const older = segmentSubtitlesForReading([original]).map((segment, index) => ({ ...segment, readingVersion: 1, chinese: `旧分段译文${index}`, translationStatus: "ready" as const }));
+  assert.equal(needsReadingSegmentation(older), true);
+  const unchanged = segmentSubtitlesForReading(older);
+  assert.deepEqual(unchanged.map((segment) => segment.chinese), older.map((segment) => segment.chinese));
+  const refined = segmentSubtitlesForReading(older, new Map([[original.id, [14, 27]]]));
+  assert.ok(refined.some((segment) => segment.readingMethod === "assisted"));
+  for (const previous of older) assert.equal(resolveOriginalSentence(previous.id, refined)?.english, original.english);
+  for (const segment of refined) assert.equal(resolveOriginalSentence(segment.id, refined)?.english, original.english);
+  assert.equal(needsReadingSegmentation(refined), false);
+  assert.deepEqual(segmentSubtitlesForReading(refined), refined);
 });

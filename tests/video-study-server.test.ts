@@ -170,6 +170,12 @@ test("collected source context is taken from the stored subtitle, not client-pro
     assert.deepEqual(sources, [{ title: "Original title", time: "00:01", english: "Stay curious." }]);
     await saveWord("curious", "test-group", words[0].sources);
     assert.equal((await sql.query("SELECT * FROM video_word_sources")).rows.length, 1);
+    const cached = (await store.document(document.id))!;
+    await sql.query("UPDATE video_study_documents SET sentences=$2::jsonb WHERE id=$1", [document.id, JSON.stringify([
+      { ...cached.sentences[0], sourceSentence: { id: "sentence-1", time: "00:01", english: "Stay curious.", chinese: "保持好奇心。", aliases: ["retired-segment"] } },
+    ])]);
+    await saveWord("curious", "test-group", [{ ...words[0].sources[0], sentenceId: "retired-segment" }]);
+    assert.equal((await sql.query("SELECT * FROM video_word_sources")).rows.length, 1);
   } finally { await db.close(); }
 });
 
@@ -239,6 +245,22 @@ test("uncertain segment refinement failure falls back safely and translation ret
   } finally { await db.close(); }
 });
 
+test("a refinement outage stops further semantic requests instead of timing out once per paragraph", async () => {
+  const { db, store } = await database();
+  try {
+    const text = Array(40).fill("practice").join(" ");
+    await store.enqueueDocument({ source: "youtube", videoId: "abcdefghijk" });
+    let calls = 0;
+    await processVideoStudyJob(store, (await store.claim("outage-worker"))!, {
+      fetchCaptions: async () => ({ video: { id: "abcdefghijk", title: "Long", channel: "Test", duration: "01:00", url: "https://www.youtube.com/watch?v=abcdefghijk" }, cues: Array.from({ length: 12 }, (_, index) => ({ startMs: index * 4000, endMs: index * 4000 + 1000, text })) }),
+      refineCuts: async () => { calls++; throw new DictionaryGenerationError("upstream"); },
+      translate: async (sentences) => new Map(sentences.map((sentence) => [sentence.id, "译文"])),
+    });
+    assert.equal(calls, 1);
+    assert.equal((await store.document("youtube-abcdefghijk-en"))?.status, "ready");
+  } finally { await db.close(); }
+});
+
 test("LLM translation responses align by sentence ID and reject omissions or duplicates", async () => {
   let translations: unknown[] = [{ id: "s2", chinese: "第二句" }, { id: "s1", chinese: "第一句" }];
   const server = createServer((request, response) => {
@@ -272,8 +294,13 @@ test("LLM translation responses align by sentence ID and reject omissions or dup
 
 test("semantic refinement returns integer cut positions only and rejects mismatched responses", async () => {
   let cuts: unknown[] = [{ id: "sentence-1", afterWords: [16, 28] }];
-  const server = createServer((request, response) => {
-    request.resume();
+  const server = createServer(async (request, response) => {
+    let body = "";
+    for await (const chunk of request) body += chunk;
+    const input = JSON.parse(body);
+    const sentence = JSON.parse(input.messages[1].content).sentences[0];
+    assert.deepEqual(sentence.words[15], { position: 16, word: "practice" });
+    assert.equal(input.max_tokens, 10_000);
     response.setHeader("Content-Type", "application/json");
     response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ cuts }) } }] }));
   });

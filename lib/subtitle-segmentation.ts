@@ -1,6 +1,6 @@
 import type { OriginalSubtitleSentence, SubtitleSentence } from "./video-study";
 
-export const READING_SEGMENT_VERSION = 1;
+export const READING_SEGMENT_VERSION = 2;
 export const MAX_READING_WORDS = 24;
 export const MAX_READING_SEGMENTS = 2000;
 const SOFT_CHARACTERS = 132;
@@ -102,12 +102,26 @@ export function splitReadingText(text: string, pauses: number[] = []): ReadingPi
   return pieces;
 }
 
+function sentencesToPlan(sentences: SubtitleSentence[]): SubtitleSentence[] {
+  const result: SubtitleSentence[] = [];
+  const restored = new Set<string>();
+  for (const sentence of sentences) {
+    if (!sentence.readingVersion || sentence.readingVersion >= READING_SEGMENT_VERSION) { result.push(sentence); continue; }
+    const original = originalSentenceFor(sentence, sentences);
+    if (restored.has(original.id)) continue;
+    restored.add(original.id);
+    const aliases = [...new Set([...(original.aliases ?? []), ...sentences.filter((item) => item.sourceSentenceId === original.id).map((item) => item.id)])];
+    result.push({ ...original, sourceSentence: { ...original, aliases } });
+  }
+  return result;
+}
+
 export function needsReadingSegmentation(sentences: SubtitleSentence[]) {
-  return sentences.some((sentence) => !sentence.readingVersion && splitReadingText(sentence.english, sentence.readingBreaks).length > 1);
+  return sentencesToPlan(sentences).some((sentence) => !sentence.readingVersion && splitReadingText(sentence.english, sentence.readingBreaks).length > 1);
 }
 
 export function readingRefinementRequests(sentences: SubtitleSentence[]): ReadingRefinementInput[] {
-  return sentences.flatMap((sentence) => {
+  return sentencesToPlan(sentences).flatMap((sentence) => {
     if (sentence.readingVersion) return [];
     const pieces = splitReadingText(sentence.english, sentence.readingBreaks);
     if (pieces.length < 2) return [];
@@ -136,9 +150,10 @@ export function splitReadingTextAtCuts(text: string, cuts: number[]): ReadingPie
 }
 
 export function segmentSubtitlesForReading(sentences: SubtitleSentence[], refinedCuts: Map<string, number[]> = new Map()): SubtitleSentence[] {
+  const previous = new Map(sentences.map((sentence) => [sentence.id, sentence]));
   const usedIds = new Set(sentences.map((sentence) => sentence.id));
   const result: SubtitleSentence[] = [];
-  for (const sentence of sentences) {
+  for (const sentence of sentencesToPlan(sentences)) {
     if (sentence.readingVersion) { result.push(sentence); continue; }
     let pieces = splitReadingText(sentence.english, sentence.readingBreaks);
     let assisted = false;
@@ -155,17 +170,20 @@ export function segmentSubtitlesForReading(sentences: SubtitleSentence[], refine
     }
     if (pieces.length === 1) { result.push(sentence); continue; }
     const original: OriginalSubtitleSentence = { id: sentence.id, time: sentence.time, english: sentence.english, chinese: sentence.chinese,
-      ...(sentence.startMs !== undefined ? { startMs: sentence.startMs } : {}), ...(sentence.endMs !== undefined ? { endMs: sentence.endMs } : {}) };
+      ...(sentence.startMs !== undefined ? { startMs: sentence.startMs } : {}), ...(sentence.endMs !== undefined ? { endMs: sentence.endMs } : {}),
+      ...(sentence.sourceSentence?.aliases?.length ? { aliases: sentence.sourceSentence.aliases } : {}) };
     for (const [index, piece] of pieces.entries()) {
       let id = sentence.id;
       if (index) {
         const base = `${sentence.id.slice(0, 75)}--segment-${piece.firstWord}`;
         id = base;
-        for (let suffix = 2; usedIds.has(id); suffix++) id = `${base}-${suffix}`;
+        for (let suffix = 2; usedIds.has(id) && !(previous.get(id)?.sourceSentenceId === sentence.id && previous.get(id)?.english === piece.english); suffix++) id = `${base}-${suffix}`;
         usedIds.add(id);
       }
+      const cached = previous.get(id);
+      const chinese = cached?.english === piece.english ? cached.chinese : "";
       result.push({ id, time: sentence.time, startMs: sentence.startMs, endMs: sentence.endMs,
-        english: piece.english, chinese: "", translationStatus: "pending", readingVersion: READING_SEGMENT_VERSION, readingMethod: assisted ? "assisted" : "rules",
+        english: piece.english, chinese, translationStatus: chinese ? "ready" : "pending", readingVersion: READING_SEGMENT_VERSION, readingMethod: assisted ? "assisted" : "rules",
         sourceSentenceId: sentence.id, ...(index === 0 ? { sourceSentence: original } : {}) });
     }
   }
@@ -178,4 +196,10 @@ export function segmentSubtitlesForReading(sentences: SubtitleSentence[], refine
 
 export function originalSentenceFor(sentence: SubtitleSentence, sentences: SubtitleSentence[]): OriginalSubtitleSentence {
   return sentence.sourceSentence ?? sentences.find((item) => item.id === sentence.sourceSentenceId)?.sourceSentence ?? sentence;
+}
+
+export function resolveOriginalSentence(id: string, sentences: SubtitleSentence[]): OriginalSubtitleSentence | undefined {
+  const sentence = sentences.find((item) => item.id === id);
+  if (sentence) return originalSentenceFor(sentence, sentences);
+  return sentences.find((item) => item.sourceSentence?.aliases?.includes(id))?.sourceSentence;
 }
