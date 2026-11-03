@@ -108,6 +108,7 @@ fun PlatypusApp(
                         onSaveNote = viewModel::updateNote,
                         onOpenReview = { viewModel.selectTab(MainTab.Review) },
                         onSpeak = wordSpeaker::speak,
+                        onImported = viewModel::refresh,
                     )
                     MainTab.Review -> ReviewScreen(
                         state = state,

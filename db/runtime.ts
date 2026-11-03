@@ -192,8 +192,8 @@ function parseEntry(row: Record<string, unknown>, relations: RelationDetail[] = 
     summary: String(row.summary),
     example: String(row.example),
     exampleZh: String(row.example_zh),
-    synonyms: JSON.parse(String(row.synonyms)) as [string, string],
-    antonyms: JSON.parse(String(row.antonyms)) as [string, string],
+    synonyms: JSON.parse(String(row.synonyms)) as string[],
+    antonyms: JSON.parse(String(row.antonyms)) as string[],
     relations,
   };
 }

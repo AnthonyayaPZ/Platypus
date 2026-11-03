@@ -19,8 +19,8 @@ android {
         applicationId = "com.anthonyaya.platypus"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.2.1"
+        versionCode = 4
+        versionName = "0.3.0"
 
         buildConfigField(
             "String",
@@ -55,6 +55,9 @@ android {
     // Reuse the exact same demo subtitles as Web. The override is useful for isolated builds.
     sourceSets.getByName("main").assets.srcDir(
         providers.gradleProperty("PLATYPUS_DEMO_ASSETS_DIR").orElse("../../shared").get(),
+    )
+    sourceSets.getByName("main").assets.srcDir(
+        providers.gradleProperty("PLATYPUS_WORDLIST_ASSETS_DIR").orElse("../../public/wordlists").get(),
     )
 
     compileOptions {

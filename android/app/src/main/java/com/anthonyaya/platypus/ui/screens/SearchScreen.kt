@@ -43,6 +43,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -77,8 +78,10 @@ fun SearchScreen(
     onSaveNote: (String, String) -> Unit,
     onOpenReview: () -> Unit,
     onSpeak: (String) -> Unit,
+    onImported: () -> Unit = {},
 ) {
     var noteWord by remember { mutableStateOf<String?>(null) }
+    var searchFocused by remember { mutableStateOf(false) }
 
     noteWord?.let { word ->
         NoteDialog(
@@ -113,7 +116,9 @@ fun SearchScreen(
                 searching = state.searching,
                 onQueryChange = onQueryChange,
                 onSearch = onSearch,
+                onFocusChange = { searchFocused = it },
             )
+            SearchWordSuggestions(state.query, enabled = searchFocused && !state.searching && state.query != state.result?.word, onChoose = { onQueryChange(it); onSearch() })
         }
 
         item {
@@ -123,7 +128,7 @@ fun SearchScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("试试：", style = MaterialTheme.typography.bodySmall, color = PlatypusColors.Muted)
-                QuickWords.take(3).forEach { word ->
+                QuickWords.take(1).forEach { word ->
                     Text(
                         word,
                         style = MaterialTheme.typography.bodySmall,
@@ -134,6 +139,8 @@ fun SearchScreen(
                         },
                     )
                 }
+                Spacer(Modifier.weight(1f))
+                SearchImportEntry(state.groups, state.selectedGroupId, onImported)
             }
         }
 
@@ -183,6 +190,7 @@ private fun SearchBox(
     searching: Boolean,
     onQueryChange: (String) -> Unit,
     onSearch: () -> Unit,
+    onFocusChange: (Boolean) -> Unit,
 ) {
     Surface(
         color = PlatypusColors.Paper,
@@ -201,7 +209,7 @@ private fun SearchBox(
             BasicTextField(
                 value = query,
                 onValueChange = onQueryChange,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).onFocusChanged { onFocusChange(it.isFocused) },
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = PlatypusColors.Ink),
                 cursorBrush = SolidColor(PlatypusColors.Orange),

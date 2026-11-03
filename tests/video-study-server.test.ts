@@ -4,7 +4,7 @@ import test from "node:test";
 import { createServer } from "node:http";
 import { PGlite } from "@electric-sql/pglite";
 import { saveWordWithClient } from "../db/learning";
-import { DictionaryGenerationError, generateDictionaryEntries, refineSubtitleReadingCuts, translateSubtitleSentences, type SubtitleTranslationInput } from "../lib/llm";
+import { DictionaryGenerationError, generateDictionaryEntries, generateDictionaryEntry, generationErrorMessage, refineSubtitleReadingCuts, translateSubtitleSentences, type SubtitleTranslationInput } from "../lib/llm";
 import { getOrGenerateDictionaryEntries } from "../lib/server/dictionary-service";
 import type { WordEntry } from "../lib/dictionary";
 import { cuesToSentences, parseSubtitleFile } from "../lib/subtitles";
@@ -354,7 +354,8 @@ test("30 dictionary entries use one HTTP request and malformed words stay isolat
     const result = await generateDictionaryEntries(words);
     assert.equal(requests.length, 1);
     assert.deepEqual(JSON.parse(requests[0].messages[1].content).words, words);
-    assert.equal(requests[0].max_tokens, 30_000);
+    assert.equal(requests[0].max_tokens, 42_000);
+    assert.deepEqual((requests[0] as unknown as { response_format: unknown }).response_format, { type: "json_object" });
     assert.equal(result.size, 30);
     for (const [word, entry] of result) { assert.ok(!(entry instanceof Error)); assert.equal(entry.word, word); assert.equal(entry.relations.length, 4); }
     entries = [batchEntry("alpha")];
@@ -365,7 +366,7 @@ test("30 dictionary entries use one HTTP request and malformed words stay isolat
     const duplicated = await generateDictionaryEntries(["alpha", "beta"]);
     assert.ok(duplicated.get("alpha") instanceof DictionaryGenerationError);
     assert.ok(!(duplicated.get("beta") instanceof Error));
-    entries = [{ ...batchEntry("alpha"), relations: [] }, batchEntry("beta")];
+    entries = [{ ...batchEntry("alpha"), meaning: "" }, batchEntry("beta")];
     const invalid = await generateDictionaryEntries(["alpha", "beta"]);
     assert.ok(invalid.get("alpha") instanceof DictionaryGenerationError);
     assert.ok(!(invalid.get("beta") instanceof Error));
@@ -380,6 +381,41 @@ test("30 dictionary entries use one HTTP request and malformed words stay isolat
   } finally {
     for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
     await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("dictionary templates allow no relations and independent zero-to-two relation types", async () => {
+  const previous = Object.fromEntries(["API_KEY", "API-KEY", "BASE_URL", "MODEL_NAME"].map((key) => [key, process.env[key]]));
+  const originalFetch = globalThis.fetch;
+  delete process.env["API-KEY"];
+  Object.assign(process.env, { API_KEY: "test-secret", BASE_URL: "https://api.deepseek.com/v1", MODEL_NAME: "test-model" });
+  const none = { ...batchEntry("anthropology"), phonetic: "", relations: [] };
+  const one = { ...batchEntry("bright"), relations: [{ word: "luminous", type: "synonym", comparison: "都指明亮。", usage: "luminous 常指发光物体。" }] };
+  let payload: unknown = { entries: [none, one] };
+  const requests: Record<string, unknown>[] = [];
+  globalThis.fetch = async (_url, init) => {
+    requests.push(JSON.parse(String(init?.body)));
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(payload) } }] });
+  };
+  try {
+    const result = await generateDictionaryEntries(["anthropology", "bright"]);
+    const empty = result.get("anthropology")!;
+    const single = result.get("bright")!;
+    assert.ok(!(empty instanceof Error)); assert.ok(!(single instanceof Error));
+    assert.deepEqual(empty.synonyms, []); assert.deepEqual(empty.antonyms, []); assert.equal(empty.phonetic, "");
+    assert.deepEqual(single.synonyms, ["luminous"]); assert.deepEqual(single.antonyms, []);
+    assert.deepEqual(requests[0].thinking, { type: "disabled" });
+    assert.deepEqual(requests[0].response_format, { type: "json_object" });
+    payload = none;
+    assert.deepEqual((await generateDictionaryEntry("anthropology")).relations, []);
+    payload = { entries: [{ ...one, relations: Array(3).fill(one.relations[0]).map((r, i) => ({ ...r, word: ["luminous", "radiant", "brilliant"][i] })) }, none] };
+    const invalid = await generateDictionaryEntries(["bright", "anthropology"]);
+    assert.ok(invalid.get("bright") instanceof Error); assert.ok(!(invalid.get("anthropology") instanceof Error));
+    assert.match(generationErrorMessage(new DictionaryGenerationError("invalid-response", "truncated")), /截断/);
+    assert.match(generationErrorMessage(new DictionaryGenerationError("invalid-response", "missing-word")), /遗漏/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
   }
 });
 

@@ -38,7 +38,9 @@ test("generates and caches dictionary misses on the server", async () => {
   assert.match(route, /\^\[a-z\]\[a-z'-\]/);
   assert.match(llm, /chat\/completions/);
   assert.match(llm, /API-KEY/);
-  assert.match(llm, /relations\.length !== 4/);
+  assert.match(llm, /relations\.length > 4/);
+  assert.match(llm, /synonyms\.length > 2/);
+  assert.match(llm, /response_format: \{ type: "json_object" \}/);
   assert.match(runtime, /saveDictionaryEntry/);
   assert.match(runtime, /DELETE FROM word_relations WHERE source_word/);
 });

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Platypus generated dictionary batch",
+  "type": "object",
+  "required": ["entries"],
+  "additionalProperties": false,
+  "properties": {
+    "entries": {
+      "type": "array", "minItems": 1, "maxItems": 30,
+      "items": { "$ref": "#/$defs/entry" }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object", "additionalProperties": false,
+      "required": ["word", "phonetic", "part", "meaning", "summary", "example", "exampleZh", "relations"],
+      "properties": {
+        "word": { "type": "string", "pattern": "^[a-z][a-z'-]{0,47}$" },
+        "phonetic": { "type": "string", "maxLength": 100 },
+        "part": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "meaning": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 600 },
+        "example": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "exampleZh": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "relations": {
+          "type": "array", "minItems": 0, "maxItems": 4,
+          "items": { "$ref": "#/$defs/relation" },
+          "allOf": [
+            { "contains": { "properties": { "type": { "const": "synonym" } }, "required": ["type"] }, "minContains": 0, "maxContains": 2 },
+            { "contains": { "properties": { "type": { "const": "antonym" } }, "required": ["type"] }, "minContains": 0, "maxContains": 2 }
+          ]
+        }
+      }
+    },
+    "relation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["word", "type", "comparison", "usage"],
+      "properties": {
+        "word": { "type": "string", "pattern": "^[a-z][a-z'-]{0,47}$" },
+        "type": { "enum": ["synonym", "antonym"] },
+        "comparison": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "usage": { "type": "string", "minLength": 1, "maxLength": 500 }
+      }
+    }
+  }
+}

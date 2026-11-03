@@ -8,8 +8,8 @@ export type WordEntry = {
   summary: string;
   example: string;
   exampleZh: string;
-  synonyms: [string, string];
-  antonyms: [string, string];
+  synonyms: string[];
+  antonyms: string[];
   relations: RelationDetail[];
 };
 

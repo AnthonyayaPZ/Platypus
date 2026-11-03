@@ -5,6 +5,7 @@ import type { WordEntry } from "../lib/dictionary";
 import type { RelationDetail } from "../lib/relations";
 import { getWordSuggestions, type WordSuggestion } from "../lib/word-suggestions";
 import VideoStudyDemo from "./components/VideoStudyWorkspace";
+import SearchBatchImport from "./components/SearchBatchImport";
 
 type View = "search" | "review" | "cards" | "library" | "video";
 type Group = { id: string; name: string; color: string; is_default: number; word_count: number; due_count: number };
@@ -139,7 +140,7 @@ export default function Home() {
     <section className="workspace">
       {view !== "video" && <header className="mobile-header"><button className="brand" onClick={() => setView("search")}><span className="brand-mark"><span className="brand-eye" /></span><span><b>鸭嘴兽单词</b></span></button><span className="streak-pill">今日 {groups.reduce((sum, group) => sum + group.due_count, 0)} 词</span></header>}
       {view === "video" ? <VideoStudyDemo groups={groups} onImported={() => { void fetch("/api/state").then(async (response) => { if (response.ok) applyState(await response.json() as StatePayload); }).catch(() => setToast("收藏已完成，重新打开词库可刷新内容")); }} /> : loading ? <LoadingState /> : view === "search" ?
-        <SearchView query={query} setQuery={setQuery} result={result} groups={groups} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} meta={result ? metaFor(result.word) : null} searching={searching} searchWord={searchWord} postAction={postAction} setToast={setToast} total={new Set(savedWords.map((item) => item.word)).size} due={groups.reduce((sum, group) => sum + group.due_count, 0)} setView={setView} />
+        <SearchView query={query} setQuery={setQuery} result={result} groups={groups} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} meta={result ? metaFor(result.word) : null} searching={searching} searchWord={searchWord} postAction={postAction} setToast={setToast} total={new Set(savedWords.map((item) => item.word)).size} due={groups.reduce((sum, group) => sum + group.due_count, 0)} setView={setView} onImported={async () => { const response = await fetch("/api/state", { cache: "no-store" }); if (!response.ok) throw new Error("词库同步失败，稍后重新打开词库即可查看"); applyState(await response.json() as StatePayload); }} />
         : view === "review" ? <ReviewView key={selectedGroup} groups={groups} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} postAction={postAction} setToast={setToast} />
         : view === "cards" ? <CardsView key={selectedGroup} groups={groups} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} words={groupWords} metaFor={metaFor} postAction={postAction} setToast={setToast} />
         : <LibraryView groups={groups} savedWords={savedWords} wordMeta={wordMeta} selectedGroup={selectedGroup} setSelectedGroup={setSelectedGroup} postAction={postAction} setToast={setToast} setView={setView} />}
@@ -156,8 +157,9 @@ function LoadingState() {
   return <div className="loading-state"><span className="loader-mark" /><p>正在整理今天的单词…</p></div>;
 }
 
-function SearchView({ query, setQuery, result, groups, selectedGroup, setSelectedGroup, meta, searching, searchWord, postAction, setToast, total, due, setView }: {
+function SearchView({ query, setQuery, result, groups, selectedGroup, setSelectedGroup, meta, searching, searchWord, postAction, setToast, total, due, setView, onImported }: {
   query: string; setQuery: (value: string) => void; result: WordEntry | null; groups: Group[]; selectedGroup: string; setSelectedGroup: (value: string) => void; meta: WordMeta | null; searching: boolean; searchWord: (word: string) => Promise<void>; postAction: (payload: Record<string, unknown>) => Promise<StatePayload>; setToast: (value: string) => void; total: number; due: number; setView: (view: View) => void;
+  onImported: () => Promise<void>;
 }) {
   const [suggestions, setSuggestions] = useState<WordSuggestion[]>([]);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
@@ -245,7 +247,7 @@ function SearchView({ query, setQuery, result, groups, selectedGroup, setSelecte
           <div className="search-box"><span>⌕</span><input autoFocus value={query} onChange={(event) => { setQuery(event.target.value); setSuggestionsOpen(false); }} onFocus={() => setSuggestionsOpen(Boolean(suggestions.length) && canShowSuggestions)} onBlur={() => window.setTimeout(() => setSuggestionsOpen(false), 120)} onKeyDown={handleSearchKeyDown} placeholder="输入一个英文单词" aria-label="输入英文单词" role="combobox" aria-autocomplete="list" aria-expanded={showSuggestions} aria-controls="word-suggestions" aria-activedescendant={showSuggestions && activeSuggestion >= 0 ? `word-suggestion-${activeSuggestion}` : undefined} autoComplete="off" /><kbd>ENTER</kbd><button disabled={searching} onClick={() => { setSuggestionsOpen(false); void searchWord(query); }}>{searching ? "生成中…" : "查一查"}</button></div>
           {showSuggestions && <div className="search-suggestions" id="word-suggestions" role="listbox" aria-label="匹配的单词">{suggestions.map((suggestion, index) => <button id={`word-suggestion-${index}`} role="option" aria-selected={index === activeSuggestion} className={index === activeSuggestion ? "active" : ""} key={suggestion.word} onMouseDown={(event) => event.preventDefault()} onClick={() => void chooseSuggestion(suggestion)}><span><b>{suggestion.match === "prefix" ? <>{suggestion.word.slice(0, suggestionPrefix.length)}<mark>{suggestion.word.slice(suggestionPrefix.length)}</mark></> : suggestion.word}</b><small>{suggestion.match === "prefix" ? "自动补全" : "拼写建议"}</small></span><p>{suggestion.match === "prefix" ? "按 Enter 或 Tab 直接查词" : `与当前输入相差 ${suggestion.distance} 处`}</p></button>)}</div>}
         </div>
-        <div className="quick-words"><span>试试：</span>{["resilient", "ephemeral", "pragmatic", "vivid"].map((word) => <button key={word} onClick={() => searchWord(word)}>{word}</button>)}</div>
+        <div className="search-secondary"><div className="quick-words"><span>试试：</span>{["resilient", "ephemeral", "pragmatic", "vivid"].map((word) => <button key={word} onClick={() => searchWord(word)}>{word}</button>)}</div><SearchBatchImport groups={groups} selectedGroup={selectedGroup} onImported={onImported} /></div>
         {result ? <article className="word-card">
           <div className="word-card-top"><WordHeading entry={result} /><div className="save-area"><select value={selectedGroup} onChange={(event) => setSelectedGroup(event.target.value)} aria-label="选择收藏分组">{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select><button onClick={save}>＋ 收藏</button></div></div>
           <WordLearningContent key={result.word} entry={result} meta={meta} groups={groups} onSaveNote={saveNote} showMetadata />
@@ -278,7 +280,7 @@ function WordLearningContent({ entry, meta, groups, onSaveNote, showMetadata = f
   return <>
     <div className="meaning"><small>核心含义</small><h3>{entry.meaning}</h3><p>{entry.summary}</p></div>
     <div className="example"><span>“</span><div><p>{entry.example}</p><small>{entry.exampleZh}</small></div></div>
-    <div className="detail-grid"><RelationCard type="相近" tone="mint" relations={synonymRelations} /><RelationCard type="相反" tone="peach" relations={antonymRelations} /></div>
+    {(synonymRelations.length > 0 || antonymRelations.length > 0) && <div className="detail-grid">{synonymRelations.length > 0 && <RelationCard type="相近" tone="mint" relations={synonymRelations} />}{antonymRelations.length > 0 && <RelationCard type="相反" tone="peach" relations={antonymRelations} />}</div>}
     <div className="note-editor"><div><small>MY NOTE</small><b>我的注释</b></div><textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="记录遇到它的场景、搭配或记忆线索…" maxLength={2000} /><button disabled={saving} onClick={save}>{saving ? "保存中…" : "保存笔记"}</button></div>
     {showMetadata && <div className="word-metadata"><span><small>首次记录</small><b>{formatDate(meta?.first_saved_at)}</b></span><span><small>所属单词本</small><b>{groupNames.length ? groupNames.join("、") : "尚未收藏"}</b></span><span><small>下次复习</small><b>{meta ? formatDate(meta.next_review) : "收藏后安排"}</b></span></div>}
   </>;
