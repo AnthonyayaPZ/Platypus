@@ -52,4 +52,4 @@
 - Android 20 项测试通过；`lintDebug` 无错误（10 个依赖/SDK 等警告），`assembleDebug` 通过。源码中的 Gradle daemon 配置尝试下载 JDK 21 失败，因此在已有隔离验证目录使用已安装 JDK 17 完成构建；未改动项目的 JDK 设置。
 - 生成 `android/app/build/outputs/apk/debug/platypus-0.3.0-debug.apk`，包名 `com.anthonyaya.platypus.debug`、versionCode 4，签名验证通过且与 0.2.1 debug 包一致，可覆盖安装。
 - 本地浏览器通过隔离 API fixture 验证默认收起、粘贴去重、只补全最后一个词、单词搜索 Tab 补全、空关联卡片隐藏、部分成功、失败重试和刷新恢复；fixture 不转发任何真实 API/数据库/LLM 请求。预览使用开发服务器，本机 Windows 的生产启动静态资源访问未通过，未修改生产服务器代码绕过。
-- 本地没有 LLM 凭据，本轮未进行新提示词的真实模型复测；没有推送 GitHub 或部署服务器，没有改动线上数据。当前 APK 仍使用原公网 API 地址，后台生成规则需部署新版 Web/worker 后才会生效。
+- 实现阶段本地没有 LLM 凭据，未做真实模型复测或线上修改。随后按用户要求推送并部署，服务器8词单次真实模型复测及线上检查均通过；详见 [部署记录](deployments/2026-11-03-bulk-import.md)。当前APK沿用原公网API地址，新的后台生成规则现已生效。
