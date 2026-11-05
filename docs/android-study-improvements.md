@@ -26,3 +26,5 @@
 `POST /api/state` 的 `beginReview` 增加可选 `includeAudio`、`priorityWords`。`GET /api/state` 返回 `reviewFeatures` 能力标记。旧客户端/网页版不传选项时保持原三题型；新安卓若发现旧服务端不支持，不会悄悄用听力模式替代用户选择。
 
 无需数据库结构迁移，无需重写已收藏词、笔记、文章或复习历史。安卓版本0.4.0、versionCode 6，保留0.3.1的阅读位置提示功能。安装需覆盖旧的同签名debug包，不要卸载或清除数据。
+
+已按用户确认推送并部署，验证情况见[发布记录](deployments/2026-11-05-android-study.md)。
