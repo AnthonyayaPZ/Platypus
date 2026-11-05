@@ -118,10 +118,12 @@ fun PlatypusApp(
                         onContinue = viewModel::continueReview,
                         onCancel = viewModel::cancelReview,
                         onSpeak = wordSpeaker::speak,
+                        onSkipAudioChange = viewModel::setSkipAudio,
                     )
                     MainTab.Cards -> CardsScreen(
                         state = state,
                         onSelectGroup = viewModel::selectGroup,
+                        onTogglePractice = viewModel::togglePractice,
                     )
                     MainTab.Video -> VideoStudyScreen(groups = state.groups, onImported = viewModel::refresh)
                     MainTab.Library -> LibraryScreen(

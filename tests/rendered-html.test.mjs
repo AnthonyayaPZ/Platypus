@@ -46,17 +46,18 @@ test("generates and caches dictionary misses on the server", async () => {
 });
 
 test("keeps personal notes, group membership, and review history separate", async () => {
-  const [schema, runtime] = await Promise.all([
+  const [schema, runtime, review] = await Promise.all([
     readFile(new URL("db/schema.ts", root), "utf8"),
     readFile(new URL("db/runtime.ts", root), "utf8"),
+    readFile(new URL("lib/server/review-options.ts", root), "utf8"),
   ]);
 
   for (const table of ["dictionary_entries", "word_relations", "user_words", "group_words", "review_sessions", "review_tasks", "review_events"]) {
     assert.match(schema, new RegExp(table));
   }
-  assert.match(runtime, /LIMIT 10/);
-  assert.match(runtime, /for \(let round = 0; round < 3/);
-  assert.match(runtime, /round === 0 \? "audio-word"/);
+  assert.match(review, /LIMIT 10/);
+  assert.match(review, /for \(let round = 0; round < 3/);
+  assert.match(review, /round === 0 \? "audio-word"/);
   assert.match(runtime, /correct === 3 \? 5 : correct === 2 \? 4/);
   assert.match(runtime, /Asia\/Shanghai/);
 });

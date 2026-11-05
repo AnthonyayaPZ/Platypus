@@ -36,6 +36,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -63,6 +64,13 @@ fun LibraryScreen(
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
     var noteWord by remember { mutableStateOf<String?>(null) }
+    var detailWord by remember { mutableStateOf<String?>(null) }
+    detailWord?.let { word ->
+        state.savedWords.firstOrNull { it.word == word }?.let { saved ->
+            WordDetailsSheet(saved.entry, state.wordMeta.firstOrNull { it.word == word }?.note ?: saved.note,
+                onDismiss = { detailWord = null }, onSpeak = { onSpeak(word) }, onEditNote = { noteWord = word })
+        }
+    }
 
     if (showCreateDialog) {
         CreateGroupDialog(
@@ -153,6 +161,7 @@ fun LibraryScreen(
                                 onSpeak = { onSpeak(saved.word) },
                                 onNote = { noteWord = saved.word },
                                 onRemove = { onRemove(saved.word, saved.groupId) },
+                                onOpen = { detailWord = saved.word },
                             )
                             if (index < state.selectedWords.lastIndex) HorizontalDivider(color = Color(0xFFECEAE3))
                         }
@@ -249,8 +258,9 @@ private fun LibraryWordRow(
     onSpeak: () -> Unit,
     onNote: () -> Unit,
     onRemove: () -> Unit,
+    onOpen: () -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 13.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier = Modifier.fillMaxWidth().testTag("library-word-${saved.word}").clickable(onClick = onOpen).padding(vertical = 13.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Surface(
                 color = Color(0xFFEEF1EB),

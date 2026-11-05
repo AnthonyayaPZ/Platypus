@@ -8,6 +8,7 @@ import com.anthonyaya.platypus.data.remote.ApiFactory
 import com.anthonyaya.platypus.data.repository.NetworkPlatypusRepository
 import com.anthonyaya.platypus.ui.PlatypusApp
 import com.anthonyaya.platypus.ui.PlatypusViewModel
+import com.anthonyaya.platypus.ui.ReviewPracticeStore
 import com.anthonyaya.platypus.ui.theme.PlatypusTheme
 
 class MainActivity : ComponentActivity() {
@@ -17,6 +18,7 @@ class MainActivity : ComponentActivity() {
 
         val factory = PlatypusViewModel.factory(
             NetworkPlatypusRepository(ApiFactory.api),
+            ReviewPracticeStore(applicationContext),
         )
 
         setContent {

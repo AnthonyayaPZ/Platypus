@@ -7,7 +7,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -79,23 +78,21 @@ fun VideoStudyLiveScreen(initialGroups: List<WordGroup>, onImported: () -> Unit 
 @Composable
 fun VideoStudyReaderContent(state: VideoLiveState, initialGroups: List<WordGroup> = emptyList(), actions: VideoReaderActions = VideoReaderActions()) {
     val context = LocalContext.current
+    val document = state.document
     var query by rememberSaveable { mutableStateOf("") }
     var panel by rememberSaveable { mutableStateOf("") }
     var showTranslation by rememberSaveable { mutableStateOf(true) }
-    var selectedOnly by rememberSaveable { mutableStateOf(false) }
+    var selectedOnly by rememberSaveable(document?.id) { mutableStateOf(false) }
     var groupId by rememberSaveable { mutableStateOf("") }
     var upload by rememberSaveable { mutableStateOf(false) }
     var uploadTitle by rememberSaveable { mutableStateOf("") }
     var subtitle by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
-    val readingList = rememberLazyListState()
     val groups = state.groups.ifEmpty { initialGroups }
     val target = groups.firstOrNull { it.id == groupId } ?: groups.firstOrNull()
     val draft = state.session.draft
     val selected = draft.map { it.word }.toSet()
-    val document = state.document
-    LaunchedEffect(document?.id) { selectedOnly = false; readingList.scrollToItem(0) }
     LaunchedEffect(state.message) {
         if (state.message.isNotBlank()) { snackbar.showSnackbar(state.message, actionLabel = "关闭"); actions.message("") }
     }
@@ -115,10 +112,8 @@ fun VideoStudyReaderContent(state: VideoLiveState, initialGroups: List<WordGroup
     }
 
     Box(Modifier.fillMaxSize()) {
-        LazyColumn(Modifier.fillMaxSize().testTag("video-reader"), state = readingList,
-            contentPadding = PaddingValues(start = 17.dp, end = 17.dp, top = 12.dp, bottom = 150.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            item {
+        key(document?.id) {
+            VideoReadingList(document, selectedOnly, selected, { selectedOnly = it }, state.busy, header = {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Column(Modifier.weight(1f)) {
                         Text(document?.title ?: "视频学词", fontFamily = FontFamily.Serif, fontSize = 28.sp, lineHeight = 35.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
@@ -126,27 +121,16 @@ fun VideoStudyReaderContent(state: VideoLiveState, initialGroups: List<WordGroup
                     }
                     TextButton(onClick = { panel = "history"; actions.refreshHistory() }, contentPadding = PaddingValues(horizontal = 4.dp), modifier = Modifier.testTag("video-open-history")) { Text("↶ 学习记录", fontSize = 12.sp) }
                 }
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("${document?.sentences?.size ?: 0} 句", Modifier.weight(1f), color = PlatypusColors.Muted, style = MaterialTheme.typography.labelSmall)
-                    ToggleLabel("中文", showTranslation) { showTranslation = it }
-                    ToggleLabel("只看已选", selectedOnly) { selectedOnly = it }
-                }
-                if (state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
-            }
-            if (document?.status in listOf("queued", "fetching", "translating")) item {
+            }, translationToggle = { ToggleLabel("中文", showTranslation) { showTranslation = it } }, loading = {
                 Text(if (document?.status == "translating") "翻译中 ${document.sentences.count { it.chinese.isNotBlank() }}/${document.sentences.size} 句" else "正在获取字幕…", color = PlatypusColors.Muted, style = MaterialTheme.typography.bodySmall)
-            }
-            if (!document?.error.isNullOrBlank()) item {
+            }, error = {
                 Text(document?.error.orEmpty(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 if (document?.status in listOf("partial", "failed")) TextButton(onClick = actions.retryDocument, enabled = !state.busy) { Text("重试未完成部分") }
-            }
-            val visible = document?.sentences.orEmpty().filter { !selectedOnly || tokenizeSubtitle(it.english).any { token -> token.word in selected } }
-            items(visible, key = { it.id }) { sentence ->
+            }, sentence = { sentence ->
                 SubtitleSentenceCard(sentence, selected, showTranslation, !state.running) { word ->
                     actions.setDraft(if (word in selected) draft.filter { it.word != word } else addDraftWord(draft, word, WordSource(document!!.id, document.title, sentence.id, sentence.time, sentence.english)))
                 }
-            }
-            if (visible.isEmpty()) item { Text(if (selectedOnly) "没有已选单词的句子。" else "点击右下角查找文章，或从学习记录中打开。", color = PlatypusColors.Muted, style = MaterialTheme.typography.bodySmall) }
+            })
         }
         Column(Modifier.align(Alignment.BottomEnd).padding(end = 15.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             ReaderCircle("search", "查找文章", Modifier.testTag("video-open-search")) { panel = "search" }

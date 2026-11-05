@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -63,6 +64,7 @@ import com.anthonyaya.platypus.ui.theme.PlatypusColors
 fun CardsScreen(
     state: PlatypusUiState,
     onSelectGroup: (String) -> Unit,
+    onTogglePractice: (String) -> Unit = {},
 ) {
     val words = state.selectedWords
     var index by remember { mutableIntStateOf(0) }
@@ -159,6 +161,8 @@ fun CardsScreen(
                         total = words.size,
                         revealed = revealed,
                         onClick = { revealed = !revealed },
+                        queued = current.word in state.priorityWords,
+                        onTogglePractice = { onTogglePractice(current.word) },
                         modifier = Modifier
                             .weight(1f)
                             .testTag("study-flashcard")
@@ -171,13 +175,14 @@ fun CardsScreen(
             }
             item {
                 Text(
-                    if (revealed) "点击收起释义 · 左右滑动切换单词" else "点击翻面 · 左滑下一个，右滑上一个",
+                    if (current.word in state.priorityWords) "已加入下一轮优先练习 · 再次点击按钮可取消" else if (revealed) "点击收起释义 · 左右滑动切换单词" else "点击翻面 · 左滑下一个，右滑上一个",
                     modifier = Modifier.fillMaxWidth(),
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     style = MaterialTheme.typography.labelSmall,
                     color = PlatypusColors.Muted,
                 )
             }
+            if (revealed) item { WordRelations(current.entry, Modifier.testTag("card-word-relations")) }
         }
     }
 }
@@ -206,6 +211,8 @@ private fun FlashCard(
     total: Int,
     revealed: Boolean,
     onClick: () -> Unit,
+    queued: Boolean,
+    onTogglePractice: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -231,13 +238,20 @@ private fun FlashCard(
             .padding(horizontal = 22.dp, vertical = 23.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
             "${index + 1} / $total",
-            modifier = Modifier.align(Alignment.Start),
+            modifier = Modifier.weight(1f),
             fontFamily = FontFamily.Monospace,
             style = MaterialTheme.typography.labelSmall,
             color = PlatypusColors.Muted,
         )
+        TextButton(onClick = onTogglePractice, modifier = Modifier.testTag("card-add-practice").semantics {
+            contentDescription = if (queued) "取消优先练习 ${word.word}" else "加入练习 ${word.word}"
+        }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) {
+            Text(if (queued) "✓ 已加入练习" else "＋ 加入练习", style = MaterialTheme.typography.labelMedium)
+        }
+        }
 
         if (!revealed) {
             Spacer(Modifier.weight(1f))
@@ -260,6 +274,12 @@ private fun FlashCard(
                 Text("中文释义", style = MaterialTheme.typography.labelSmall, color = PlatypusColors.OrangeDark)
                 Text(word.entry.meaning, style = MaterialTheme.typography.titleLarge)
                 Text(word.entry.summary, style = MaterialTheme.typography.bodyMedium, color = PlatypusColors.Muted)
+                val relations = word.entry.displayRelations()
+                val synonyms = relations.filter { it.type == "synonym" }.map { it.word }
+                val antonyms = relations.filter { it.type == "antonym" }.map { it.word }
+                if (synonyms.isNotEmpty()) Text("近义词 · ${synonyms.joinToString(" · ")}", style = MaterialTheme.typography.bodySmall, color = PlatypusColors.InkSecondary)
+                if (antonyms.isNotEmpty()) Text("反义词 · ${antonyms.joinToString(" · ")}", style = MaterialTheme.typography.bodySmall, color = PlatypusColors.InkSecondary)
+                if (relations.isEmpty()) Text("暂无可靠的近反义词", style = MaterialTheme.typography.bodySmall, color = PlatypusColors.Muted)
             }
             Column(
                 modifier = Modifier

@@ -22,6 +22,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Checkbox
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -54,6 +57,7 @@ fun ReviewScreen(
     onContinue: () -> Unit,
     onCancel: () -> Unit,
     onSpeak: (String) -> Unit,
+    onSkipAudioChange: (Boolean) -> Unit = {},
 ) {
     val session = state.reviewSession
     val feedbackTask = session?.tasks?.firstOrNull { it.id == state.reviewFeedbackTaskId }
@@ -96,6 +100,14 @@ fun ReviewScreen(
                 onSelect = onSelectGroup,
                 modifier = Modifier.fillMaxWidth(),
             )
+            if (session == null || session.status == "active") {
+                Row(Modifier.fillMaxWidth().testTag("review-skip-audio").toggleable(value = state.skipAudioThisRound,
+                    enabled = !state.actionLoading && !showingFeedback && (session == null || !state.skipAudioThisRound),
+                    role = Role.Checkbox, onValueChange = onSkipAudioChange), verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(state.skipAudioThisRound, onCheckedChange = null)
+                    Text("本轮不练习听力题", style = MaterialTheme.typography.bodyMedium)
+                }
+            }
         }
 
         if (session == null) {
@@ -104,6 +116,8 @@ fun ReviewScreen(
                 ReviewStartCard(
                     groupName = group?.name ?: "请选择词库",
                     due = group?.dueCount ?: 0,
+                    priority = state.selectedWords.count { it.word in state.priorityWords },
+                    skipAudio = state.skipAudioThisRound,
                     loading = state.actionLoading,
                     onStart = { onStart(state.selectedGroupId) },
                 )
@@ -197,6 +211,8 @@ fun ReviewScreen(
 private fun ReviewStartCard(
     groupName: String,
     due: Int,
+    priority: Int,
+    skipAudio: Boolean,
     loading: Boolean,
     onStart: () -> Unit,
 ) {
@@ -208,9 +224,10 @@ private fun ReviewStartCard(
         ) {
             Text("◎", fontFamily = FontFamily.Serif, fontSize = 62.sp, color = PlatypusColors.OrangeDark)
             TinyPill("$groupName · $due 词待复习")
+            if (priority > 0) TinyPill("$priority 个词已加入优先练习", background = PlatypusColors.Mint)
             Text("准备好重新认识它们了吗？", style = MaterialTheme.typography.headlineMedium)
             Text(
-                "听音、词义和拼写三种题型会交替出现，完成后自动安排下一次复习。",
+                if (skipAudio) "本轮仅练习单词选义与词义选词，每个词仍练习三次，不出听力题。" else "听音、词义和拼写三种题型会交替出现，完成后自动安排下一次复习。",
                 style = MaterialTheme.typography.bodyMedium,
                 color = PlatypusColors.Muted,
             )
@@ -218,7 +235,7 @@ private fun ReviewStartCard(
             InkButton(
                 text = if (loading) "正在准备…" else "开始复习",
                 onClick = onStart,
-                enabled = due > 0 && !loading,
+                enabled = (due > 0 || priority > 0) && !loading,
                 modifier = Modifier.fillMaxWidth(),
             )
         }

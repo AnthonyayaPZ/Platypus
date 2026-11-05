@@ -1,6 +1,8 @@
 import { assertDatabaseConfiguration, pool } from "./index";
 import { dictionary, type WordEntry } from "../lib/dictionary";
 import { relationDetails, type RelationDetail } from "../lib/relations";
+import { parseReviewOptions, planReviewQuestions, selectReviewRows, silencePendingAudio, type ReviewOptions } from "../lib/server/review-options";
+import { VideoStudyError } from "../lib/server/sql";
 
 export const DEMO_USER_ID = "local-demo";
 const TIME_ZONE = "Asia/Shanghai";
@@ -229,15 +231,6 @@ function normalizeMeta(row: Record<string, unknown>) {
   };
 }
 
-function shuffle<T>(items: T[]) {
-  const result = [...items];
-  for (let index = result.length - 1; index > 0; index -= 1) {
-    const target = Math.floor(Math.random() * (index + 1));
-    [result[index], result[target]] = [result[target], result[index]];
-  }
-  return result;
-}
-
 // ---------------------------------------------------------------------------
 // Dictionary search
 // ---------------------------------------------------------------------------
@@ -353,6 +346,7 @@ export async function loadState() {
   const relationsByWord = relationMap(relationsRes.rows as Record<string, unknown>[]);
 
   return {
+    reviewFeatures: { version: 1, priorityWords: true, audioOptional: true },
     groups: groupsRes.rows.map((g: Record<string, unknown>) => ({
       ...g,
       word_count: Number(g.word_count),
@@ -406,91 +400,42 @@ export async function getReviewSession(sessionId: string) {
   };
 }
 
-function taskOptions(type: QuestionType, entry: WordEntry, entries: WordEntry[]) {
-  const useMeaning = type === "word-meaning";
-  const correct = useMeaning ? entry.meaning : entry.word;
-  const distractors = shuffle(entries.filter((item) => item.word !== entry.word))
-    .slice(0, 3).map((item) => (useMeaning ? item.meaning : item.word));
-  return { correct, options: shuffle([correct, ...distractors]) };
-}
-
-export async function beginReviewSession(groupId: string) {
+export async function beginReviewSession(groupId: string, input: Partial<ReviewOptions> = {}) {
   await ensureDatabase();
-  const { rows: groupRows } = await pool.query(
-    "SELECT id FROM word_groups WHERE id = $1 AND user_id = $2",
-    [groupId, DEMO_USER_ID],
-  );
-  if (!groupRows.length) throw new Error("单词分组不存在");
-
-  const { rows: activeRows } = await pool.query(
-    `SELECT id FROM review_sessions
-    WHERE user_id = $1 AND group_id = $2 AND status = 'active'
-    ORDER BY created_at DESC LIMIT 1`,
-    [DEMO_USER_ID, groupId],
-  );
-  if (activeRows.length) return getReviewSession(activeRows[0].id);
-
-  const { rows: dueRows } = await pool.query(
-    `SELECT d.* FROM group_words gw
-    JOIN user_words uw ON uw.user_id = gw.user_id AND uw.word = gw.word
-    JOIN dictionary_entries d ON d.word = gw.word
-    WHERE gw.user_id = $1 AND gw.group_id = $2 AND uw.next_review <= $3
-    ORDER BY uw.next_review ASC, uw.first_saved_at ASC LIMIT 10`,
-    [DEMO_USER_ID, groupId, today()],
-  );
-  if (!dueRows.length) return null;
-
-  const entries: WordEntry[] = dueRows.map((row: Record<string, unknown>) => parseEntry(row));
-  const { rows: distractorRows } = await pool.query(
-    `SELECT * FROM dictionary_entries
-    WHERE NOT (word = ANY($1::text[]))
-    ORDER BY word
-    LIMIT 50`,
-    [entries.map((entry) => entry.word)],
-  );
-  const allEntries: WordEntry[] = [
-    ...entries,
-    ...distractorRows.map((row: Record<string, unknown>) => parseEntry(row)),
-  ];
-
-  const tasks: { word: string; type: QuestionType; options: string[]; correct: string }[] = [];
-  for (let round = 0; round < 3; round += 1) {
-    const roundTasks = shuffle(entries.map((entry, index) => {
-      const secondType: QuestionType = index % 2 === 0 ? "word-meaning" : "meaning-word";
-      const type: QuestionType =
-        round === 0 ? "audio-word"
-        : round === 1 ? secondType
-        : secondType === "word-meaning" ? "meaning-word" : "word-meaning";
-      return { word: entry.word, type, ...taskOptions(type, entry, allEntries) };
-    }));
-    if (tasks.length && roundTasks[0]?.word === tasks.at(-1)?.word && roundTasks.length > 1) {
-      [roundTasks[0], roundTasks[1]] = [roundTasks[1], roundTasks[0]];
+  const options = parseReviewOptions(input);
+  const client = await pool.connect();
+  let sessionId: string | null = null;
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`review:${DEMO_USER_ID}:${groupId}`]);
+    const { rows: groupRows } = await client.query("SELECT id FROM word_groups WHERE id=$1 AND user_id=$2", [groupId, DEMO_USER_ID]);
+    if (!groupRows.length) throw new Error("单词分组不存在");
+    const { rows: activeRows } = await client.query(`SELECT id FROM review_sessions
+      WHERE user_id=$1 AND group_id=$2 AND status='active' ORDER BY created_at DESC LIMIT 1 FOR UPDATE`, [DEMO_USER_ID, groupId]);
+    if (activeRows.length) {
+      sessionId = String(activeRows[0].id);
+      if (!options.includeAudio) await silencePendingAudio(client, DEMO_USER_ID, sessionId);
+    } else {
+      const dueRows = await selectReviewRows(client, DEMO_USER_ID, groupId, today(), options.priorityWords);
+      if (dueRows.length) {
+        const entries = dueRows.map((row) => parseEntry(row));
+        const { rows: distractorRows } = await client.query(`SELECT * FROM dictionary_entries
+          WHERE NOT (word=ANY($1::text[])) ORDER BY word LIMIT 50`, [entries.map((entry) => entry.word)]);
+        const allEntries = [...entries, ...distractorRows.map((row) => parseEntry(row))];
+        const tasks = planReviewQuestions(entries, allEntries, options);
+        sessionId = `session-${crypto.randomUUID()}`;
+        await client.query(`INSERT INTO review_sessions (id,user_id,group_id,status,word_count,total_tasks,created_at)
+          VALUES($1,$2,$3,'active',$4,$5,$6)`, [sessionId, DEMO_USER_ID, groupId, entries.length, tasks.length, nowIso()]);
+        for (const [position, task] of tasks.entries()) {
+          await client.query(`INSERT INTO review_tasks (id,session_id,word,question_type,position,options,correct_answer)
+            VALUES($1,$2,$3,$4,$5,$6,$7)`, [`task-${crypto.randomUUID()}`, sessionId, task.word, task.type, position, JSON.stringify(task.options), task.correct]);
+        }
+      }
     }
-    tasks.push(...roundTasks);
-  }
-
-  const sessionId = `session-${crypto.randomUUID()}`;
-  const timestamp = nowIso();
-
-  await batch([
-    {
-      text: `INSERT INTO review_sessions
-        (id, user_id, group_id, status, word_count, total_tasks, created_at)
-        VALUES ($1, $2, $3, 'active', $4, $5, $6)`,
-      values: [sessionId, DEMO_USER_ID, groupId, entries.length, tasks.length, timestamp],
-    },
-    ...tasks.map((task, position) => ({
-      text: `INSERT INTO review_tasks
-        (id, session_id, word, question_type, position, options, correct_answer)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      values: [
-        `task-${crypto.randomUUID()}`, sessionId, task.word, task.type,
-        position, JSON.stringify(task.options), task.correct,
-      ],
-    })),
-  ]);
-
-  return getReviewSession(sessionId);
+    await client.query("COMMIT");
+  } catch (error) { await client.query("ROLLBACK"); throw error; }
+  finally { client.release(); }
+  return sessionId ? getReviewSession(sessionId) : null;
 }
 
 export async function answerReviewTask(sessionId: string, taskId: string, selectedAnswer: string) {
@@ -499,6 +444,7 @@ export async function answerReviewTask(sessionId: string, taskId: string, select
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await client.query("SELECT id FROM review_sessions WHERE id=$1 AND user_id=$2 FOR UPDATE", [sessionId, DEMO_USER_ID]);
     const { rows: taskRows } = await client.query(
       `UPDATE review_tasks AS t
       SET selected_answer = $1,
@@ -507,6 +453,7 @@ export async function answerReviewTask(sessionId: string, taskId: string, select
       FROM review_sessions AS s
       WHERE t.id = $3 AND t.session_id = $4 AND t.answered_at IS NULL
         AND s.id = t.session_id AND s.user_id = $5 AND s.status = 'active'
+        AND t.options::jsonb ? $1
       RETURNING t.*`,
       [selectedAnswer, timestamp, taskId, sessionId, DEMO_USER_ID],
     );
@@ -517,6 +464,9 @@ export async function answerReviewTask(sessionId: string, taskId: string, select
         WHERE t.id = $1 AND t.session_id = $2 AND s.user_id = $3`,
         [taskId, sessionId, DEMO_USER_ID],
       );
+      if (existingRows.length && !existingRows[0].answered_at) {
+        throw new VideoStudyError("题目已更新或答案不在选项中，请重新进入本轮练习", 409);
+      }
       if (!existingRows[0]?.answered_at) {
         throw new Error("复习题目不存在或会话已经结束");
       }

@@ -160,17 +160,14 @@ fun SearchScreen(
                 )
             }
 
-            if (entry.relations.isNotEmpty()) {
+            if (entry.displayRelations().isNotEmpty()) {
                 item {
                     SectionHeading(
                         eyebrow = "Word relationships",
                         title = "近义与反义辨析",
                     )
                 }
-                val synonyms = entry.relations.filter { it.type == "synonym" }
-                val antonyms = entry.relations.filter { it.type == "antonym" }
-                if (synonyms.isNotEmpty()) item { RelationGroup(true, synonyms) }
-                if (antonyms.isNotEmpty()) item { RelationGroup(false, antonyms) }
+                item { WordRelations(entry) }
             }
         }
 
@@ -390,7 +387,7 @@ private fun WordCard(
 }
 
 @Composable
-private fun RelationGroup(synonym: Boolean, relations: List<RelationDetail>) {
+internal fun RelationGroup(synonym: Boolean, relations: List<RelationDetail>) {
     val background = if (synonym) PlatypusColors.Mint else PlatypusColors.Peach
     val border = if (synonym) Color(0xFFCADDd1) else Color(0xFFECCDBB)
     val label = if (synonym) "近义词 · SIMILAR" else "反义词 · OPPOSITE"
@@ -419,8 +416,8 @@ private fun RelationGroup(synonym: Boolean, relations: List<RelationDetail>) {
                 verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
                 Text(relation.word, fontFamily = FontFamily.Serif, fontSize = 18.sp)
-                Text(relation.comparison, style = MaterialTheme.typography.bodySmall, color = Color(0xFF425C54))
-                Text(relation.usage, style = MaterialTheme.typography.labelSmall, color = Color(0xFF657871))
+                if (relation.comparison.isNotBlank()) Text(relation.comparison, style = MaterialTheme.typography.bodySmall, color = Color(0xFF425C54))
+                if (relation.usage.isNotBlank()) Text(relation.usage, style = MaterialTheme.typography.labelSmall, color = Color(0xFF657871))
             }
         }
     }

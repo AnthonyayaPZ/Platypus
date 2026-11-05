@@ -91,7 +91,10 @@ data class StateResponse(
     val wordMeta: List<WordMeta> = emptyList(),
     val session: ReviewSession? = null,
     val error: String? = null,
+    val reviewFeatures: ReviewFeatures = ReviewFeatures(),
 )
+
+data class ReviewFeatures(val version: Int = 0, val priorityWords: Boolean = false, val audioOptional: Boolean = false)
 
 data class StateAction(
     val action: String,
@@ -102,6 +105,8 @@ data class StateAction(
     val sessionId: String? = null,
     val taskId: String? = null,
     val selectedAnswer: String? = null,
+    val includeAudio: Boolean? = null,
+    val priorityWords: List<String>? = null,
 )
 
 data class ApiError(val error: String? = null)

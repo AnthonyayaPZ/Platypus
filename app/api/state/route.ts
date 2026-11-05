@@ -1,6 +1,7 @@
 import { pool } from "../../../db/index";
 import { saveWordToGroup } from "../../../db/learning";
 import { VideoStudyError } from "../../../lib/server/sql";
+import { parseReviewOptions } from "../../../lib/server/review-options";
 import {
   answerReviewTask,
   beginReviewSession,
@@ -18,7 +19,7 @@ type Action =
   | { action: "saveWord"; word: string; groupId: string }
   | { action: "removeWord"; word: string; groupId: string }
   | { action: "updateNote"; word: string; note: string }
-  | { action: "beginReview"; groupId: string }
+  | { action: "beginReview"; groupId: string; includeAudio?: boolean; priorityWords?: string[] }
   | { action: "cancelReview"; sessionId: string }
   | { action: "answerTask"; sessionId: string; taskId: string; selectedAnswer: string };
 
@@ -180,7 +181,8 @@ export async function POST(request: Request) {
     }
 
     if (payload.action === "beginReview") {
-      const session = await beginReviewSession(payload.groupId);
+      if (typeof payload.groupId !== "string" || !payload.groupId.trim()) throw new HttpError("请选择词库", 400);
+      const session = await beginReviewSession(payload.groupId, parseReviewOptions(payload));
       return Response.json({ ...(await loadState()), session });
     }
 

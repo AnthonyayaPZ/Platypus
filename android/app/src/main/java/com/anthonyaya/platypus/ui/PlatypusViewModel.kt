@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.anthonyaya.platypus.data.model.ReviewSession
+import com.anthonyaya.platypus.data.model.ReviewFeatures
 import com.anthonyaya.platypus.data.model.SavedWord
 import com.anthonyaya.platypus.data.model.StateAction
 import com.anthonyaya.platypus.data.model.StateResponse
@@ -40,6 +41,9 @@ data class PlatypusUiState(
     val searching: Boolean = false,
     val actionLoading: Boolean = false,
     val message: String? = null,
+    val priorityWords: List<String> = emptyList(),
+    val skipAudioThisRound: Boolean = false,
+    val reviewFeatures: ReviewFeatures = ReviewFeatures(),
 ) {
     val totalSaved: Int get() = savedWords.distinctBy { it.word }.size
     val totalDue: Int get() = groups.sumOf { it.dueCount }
@@ -49,8 +53,9 @@ data class PlatypusUiState(
 
 class PlatypusViewModel(
     private val repository: PlatypusRepository,
+    private val practiceStore: PracticeQueuePersistence? = null,
 ) : ViewModel() {
-    private val _uiState = MutableStateFlow(PlatypusUiState())
+    private val _uiState = MutableStateFlow(PlatypusUiState(priorityWords = practiceStore?.load().orEmpty()))
     val uiState: StateFlow<PlatypusUiState> = _uiState.asStateFlow()
 
     init {
@@ -140,9 +145,51 @@ class PlatypusViewModel(
         successMessage = "词库已删除",
     )
 
-    fun beginReview(groupId: String) {
-        _uiState.update { it.copy(reviewFeedbackTaskId = null) }
-        act(StateAction(action = "beginReview", groupId = groupId))
+    fun togglePractice(word: String) {
+        val current = _uiState.value
+        if (current.savedWords.none { it.word == word }) { showMessage("请先将该单词收藏到词库"); return }
+        val removing = word in current.priorityWords
+        if (!removing && current.priorityWords.size >= 200) { showMessage("优先练习队列已满，请先完成部分练习"); return }
+        val words = if (removing) current.priorityWords - word else current.priorityWords + word
+        practiceStore?.save(words)
+        _uiState.update { it.copy(priorityWords = words, message = if (removing) "已取消优先练习" else "已加入练习，下一轮在所属词库中优先安排") }
+    }
+
+    fun setSkipAudio(skip: Boolean) {
+        val current = _uiState.value
+        if (current.actionLoading || current.reviewFeedbackTaskId != null) return
+        if (current.reviewSession?.status == "active") {
+            if (!skip) { showMessage("本轮已关闭听力，下一轮可重新选择"); return }
+            requestReview(current.reviewSession.groupId.ifBlank { current.selectedGroupId }, true)
+        } else _uiState.update { it.copy(skipAudioThisRound = skip) }
+    }
+
+    fun beginReview(groupId: String) = requestReview(groupId, _uiState.value.skipAudioThisRound)
+
+    private fun requestReview(groupId: String, skipAudio: Boolean) {
+        val current = _uiState.value
+        if (current.actionLoading) return
+        val groupWords = current.savedWords.filter { it.groupId == groupId }.map { it.word }.toSet()
+        val priority = current.priorityWords.filter { it in groupWords }
+        if ((skipAudio || priority.isNotEmpty()) && (current.reviewFeatures.version < 1 ||
+            skipAudio && !current.reviewFeatures.audioOptional || priority.isNotEmpty() && !current.reviewFeatures.priorityWords)) {
+            showMessage("服务器尚未支持新的练习选项，请先更新服务端；本次不会启动听力练习")
+            return
+        }
+        _uiState.update { it.copy(actionLoading = true, reviewFeedbackTaskId = null) }
+        viewModelScope.launch {
+            repository.act(StateAction(action = "beginReview", groupId = groupId, includeAudio = !skipAudio, priorityWords = priority))
+                .onSuccess { response ->
+                    if (skipAudio && response.session?.tasks?.any { it.questionType == "audio-word" && it.selectedAnswer == null } == true) {
+                        showMessage("服务器没有应用无听力选项，请更新服务端后重试")
+                    } else {
+                        applyState(response)
+                        _uiState.update { it.copy(skipAudioThisRound = skipAudio,
+                            message = if (response.session == null) "当前词库没有待复习或优先练习的单词" else it.message) }
+                    }
+                }.onFailure(::showError)
+            _uiState.update { it.copy(actionLoading = false) }
+        }
     }
 
     fun answerTask(taskId: String, answer: String) {
@@ -179,16 +226,18 @@ class PlatypusViewModel(
         act(
             StateAction(action = "cancelReview", sessionId = sessionId),
             successMessage = "本次复习已结束",
+            afterSuccess = { _uiState.update { it.copy(skipAudioThisRound = false) } },
         )
     }
 
-    private fun act(action: StateAction, successMessage: String? = null) {
+    private fun act(action: StateAction, successMessage: String? = null, afterSuccess: () -> Unit = {}) {
         if (_uiState.value.actionLoading) return
         viewModelScope.launch {
             _uiState.update { it.copy(actionLoading = true) }
             repository.act(action)
                 .onSuccess { response ->
                     applyState(response)
+                    afterSuccess()
                     if (successMessage != null) {
                         _uiState.update { it.copy(message = successMessage) }
                     }
@@ -199,6 +248,8 @@ class PlatypusViewModel(
     }
 
     private fun applyState(response: StateResponse) {
+        val remaining = remainingPracticeWords(_uiState.value.priorityWords, response.savedWords, response.session)
+        practiceStore?.save(remaining)
         _uiState.update { current ->
             val selectedGroup = current.selectedGroupId
                 .takeIf { id -> response.groups.any { it.id == id } }
@@ -211,6 +262,8 @@ class PlatypusViewModel(
                 wordMeta = response.wordMeta,
                 selectedGroupId = selectedGroup,
                 reviewSession = response.session,
+                reviewFeatures = response.reviewFeatures,
+                priorityWords = remaining,
                 reviewFeedbackTaskId = current.reviewFeedbackTaskId?.takeIf { id ->
                     response.session?.tasks?.any { it.id == id } == true
                 },
@@ -223,11 +276,11 @@ class PlatypusViewModel(
     }
 
     companion object {
-        fun factory(repository: PlatypusRepository): ViewModelProvider.Factory =
+        fun factory(repository: PlatypusRepository, practiceStore: PracticeQueuePersistence? = null): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                    return PlatypusViewModel(repository) as T
+                    return PlatypusViewModel(repository, practiceStore) as T
                 }
             }
     }
