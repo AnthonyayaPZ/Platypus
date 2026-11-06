@@ -1,5 +1,6 @@
 import type { WordEntry } from "../dictionary";
 import { VideoStudyError, type SqlExecutor } from "./sql";
+import { normalizeDictionaryTerm } from "../terms";
 
 export type ReviewOptions = { includeAudio: boolean; priorityWords: string[] };
 export type ReviewQuestion = { word: string; type: "audio-word" | "word-meaning" | "meaning-word"; options: string[]; correct: string };
@@ -8,7 +9,7 @@ type ReviewEntry = Pick<WordEntry, "word" | "meaning">;
 export function parseReviewOptions(input: { includeAudio?: unknown; priorityWords?: unknown }): ReviewOptions {
   if (input.includeAudio !== undefined && typeof input.includeAudio !== "boolean") throw new VideoStudyError("听力选项必须为布尔值");
   const words = input.priorityWords ?? [];
-  if (!Array.isArray(words) || words.length > 200 || words.some((word) => typeof word !== "string" || !/^[a-z][a-z'-]{0,47}$/.test(word))) {
+  if (!Array.isArray(words) || words.length > 200 || words.some((word) => typeof word !== "string" || normalizeDictionaryTerm(word) !== word)) {
     throw new VideoStudyError("优先练习列表无效，每次最多200个已收藏单词");
   }
   return { includeAudio: input.includeAudio !== false, priorityWords: [...new Set<string>(words)] };

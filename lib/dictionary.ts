@@ -1,6 +1,7 @@
 import type { RelationDetail } from "./relations";
 
 export type WordEntry = {
+  /** Canonical dictionary key: a single word or a complete space-separated phrase. */
   word: string;
   phonetic: string;
   part: string;

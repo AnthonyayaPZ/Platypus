@@ -11,6 +11,8 @@ import com.anthonyaya.platypus.data.model.StateResponse
 import com.anthonyaya.platypus.data.model.WordEntry
 import com.anthonyaya.platypus.data.model.WordGroup
 import com.anthonyaya.platypus.data.model.WordMeta
+import com.anthonyaya.platypus.data.model.normalizeDictionaryTerm
+import com.anthonyaya.platypus.data.model.defaultSearchGroup
 import com.anthonyaya.platypus.data.repository.PlatypusRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,6 +37,7 @@ data class PlatypusUiState(
     val savedWords: List<SavedWord> = emptyList(),
     val wordMeta: List<WordMeta> = emptyList(),
     val selectedGroupId: String = "",
+    val searchTargetGroupId: String = "",
     val reviewSession: ReviewSession? = null,
     val reviewFeedbackTaskId: String? = null,
     val initialLoading: Boolean = true,
@@ -49,6 +52,8 @@ data class PlatypusUiState(
     val totalDue: Int get() = groups.sumOf { it.dueCount }
     val selectedWords: List<SavedWord>
         get() = savedWords.filter { it.groupId == selectedGroupId }
+    val searchGroupId: String get() = searchTargetGroupId.takeIf { id -> groups.any { it.id == id } }
+        ?: defaultSearchGroup(groups, result?.word.orEmpty(), selectedGroupId)
 }
 
 class PlatypusViewModel(
@@ -67,6 +72,7 @@ class PlatypusViewModel(
     fun updateQuery(query: String) = _uiState.update { it.copy(query = query) }
 
     fun selectGroup(groupId: String) = _uiState.update { it.copy(selectedGroupId = groupId) }
+    fun selectSearchGroup(groupId: String) = _uiState.update { it.copy(searchTargetGroupId = groupId) }
 
     fun consumeMessage() = _uiState.update { it.copy(message = null) }
 
@@ -82,9 +88,9 @@ class PlatypusViewModel(
     }
 
     fun search() {
-        val query = _uiState.value.query.trim().lowercase()
-        if (!query.matches(Regex("^[a-z][a-z'-]{0,47}$"))) {
-            _uiState.update { it.copy(message = "请输入单个英文单词") }
+        val query = normalizeDictionaryTerm(_uiState.value.query)
+        if (query == null) {
+            _uiState.update { it.copy(message = "请输入英文单词或短语（最多8个词、96个字符）；批量单词请用批量导入") }
             return
         }
         if (_uiState.value.searching) return
@@ -102,6 +108,7 @@ class PlatypusViewModel(
                                 query = entry.word,
                                 result = entry,
                                 resultMeta = response.meta,
+                                searchTargetGroupId = "",
                             )
                         }
                     }

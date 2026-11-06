@@ -6,9 +6,10 @@ import type { RelationDetail } from "../lib/relations";
 import { getWordSuggestions, type WordSuggestion } from "../lib/word-suggestions";
 import VideoStudyDemo from "./components/VideoStudyWorkspace";
 import SearchBatchImport from "./components/SearchBatchImport";
+import { defaultSearchGroup, isPhrase, normalizeDictionaryTerm } from "../lib/terms";
 
 type View = "search" | "review" | "cards" | "library" | "video";
-type Group = { id: string; name: string; color: string; is_default: number; word_count: number; due_count: number };
+type Group = { id: string; name: string; color: string; is_default: number; word_count: number; due_count: number; kind?: string };
 type WordMeta = { word: string; note: string; first_saved_at: string; updated_at: string; repetitions: number; next_review: string; last_reviewed: string | null; group_ids: string[] };
 type SavedWord = { word: string; group_id: string; added_at: string; note: string; first_saved_at: string; repetitions: number; next_review: string; last_reviewed: string | null; entry: WordEntry };
 type ReviewTask = { id: string; word: string; question_type: "audio-word" | "word-meaning" | "meaning-word"; position: number; options: string[]; correct_answer: string; selected_answer: string | null; is_correct: boolean | null; answered_at: string | null; phonetic: string; meaning: string; summary: string };
@@ -87,20 +88,21 @@ export default function Home() {
   };
 
   const searchWord = async (word: string) => {
-    const normalized = word.trim();
+    const normalized = normalizeDictionaryTerm(word);
+    if (!normalized) { setToast("请输入英文单词或短语（最多8个词、96个字符）；批量单词请用批量导入"); return; }
     if (!normalized || searching) return;
     setSearching(true);
     try {
       const response = await fetch(`/api/search?q=${encodeURIComponent(normalized)}`);
       const data = await response.json() as { error?: string; entry: WordEntry };
       if (!response.ok) {
-        setToast(data.error || "暂时无法检索这个单词");
+        setToast(data.error || "暂时无法检索这个词或短语");
         return;
       }
       setResult(data.entry);
       setQuery(data.entry.word);
     } catch {
-      setToast("暂时无法检索这个单词");
+      setToast("暂时无法检索这个词或短语");
     } finally {
       setSearching(false);
     }
@@ -157,10 +159,13 @@ function LoadingState() {
   return <div className="loading-state"><span className="loader-mark" /><p>正在整理今天的单词…</p></div>;
 }
 
-function SearchView({ query, setQuery, result, groups, selectedGroup, setSelectedGroup, meta, searching, searchWord, postAction, setToast, total, due, setView, onImported }: {
+function SearchView({ query, setQuery, result, groups, selectedGroup, meta, searching, searchWord, postAction, setToast, total, due, setView, onImported }: {
   query: string; setQuery: (value: string) => void; result: WordEntry | null; groups: Group[]; selectedGroup: string; setSelectedGroup: (value: string) => void; meta: WordMeta | null; searching: boolean; searchWord: (word: string) => Promise<void>; postAction: (payload: Record<string, unknown>) => Promise<StatePayload>; setToast: (value: string) => void; total: number; due: number; setView: (view: View) => void;
   onImported: () => Promise<void>;
 }) {
+  const [saveTarget, setSaveTarget] = useState<{ word: string; id: string } | null>(null);
+  const targetGroup = result && saveTarget?.word === result.word && groups.some((group) => group.id === saveTarget.id)
+    ? saveTarget.id : defaultSearchGroup(groups, result?.word ?? "", selectedGroup);
   const [suggestions, setSuggestions] = useState<WordSuggestion[]>([]);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [activeSuggestion, setActiveSuggestion] = useState(-1);
@@ -197,13 +202,13 @@ function SearchView({ query, setQuery, result, groups, selectedGroup, setSelecte
   };
 
   const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "ArrowDown" && suggestions.length) {
+    if (event.key === "ArrowDown" && canShowSuggestions && suggestions.length) {
       event.preventDefault();
       setSuggestionsOpen(true);
       setActiveSuggestion((current) => (current + 1) % suggestions.length);
       return;
     }
-    if (event.key === "ArrowUp" && suggestions.length) {
+    if (event.key === "ArrowUp" && canShowSuggestions && suggestions.length) {
       event.preventDefault();
       setSuggestionsOpen(true);
       setActiveSuggestion((current) => (current - 1 + suggestions.length) % suggestions.length);
@@ -229,8 +234,8 @@ function SearchView({ query, setQuery, result, groups, selectedGroup, setSelecte
   const save = async () => {
     if (!result) return;
     try {
-      await postAction({ action: "saveWord", word: result.word, groupId: selectedGroup });
-      setToast(`已收藏到「${groups.find((group) => group.id === selectedGroup)?.name || "默认收藏"}」`);
+      await postAction({ action: "saveWord", word: result.word, ...(targetGroup ? { groupId: targetGroup } : {}) });
+      setToast(`已收藏到「${groups.find((group) => group.id === targetGroup)?.name || (isPhrase(result.word) ? "短语收藏" : "默认收藏")}」`);
     } catch (error) { setToast(error instanceof Error ? error.message : "收藏失败"); }
   };
   const saveNote = async (note: string) => {
@@ -244,12 +249,12 @@ function SearchView({ query, setQuery, result, groups, selectedGroup, setSelecte
     <div className="search-layout">
       <div className="search-main">
         <div className="search-combobox">
-          <div className="search-box"><span>⌕</span><input autoFocus value={query} onChange={(event) => { setQuery(event.target.value); setSuggestionsOpen(false); }} onFocus={() => setSuggestionsOpen(Boolean(suggestions.length) && canShowSuggestions)} onBlur={() => window.setTimeout(() => setSuggestionsOpen(false), 120)} onKeyDown={handleSearchKeyDown} placeholder="输入一个英文单词" aria-label="输入英文单词" role="combobox" aria-autocomplete="list" aria-expanded={showSuggestions} aria-controls="word-suggestions" aria-activedescendant={showSuggestions && activeSuggestion >= 0 ? `word-suggestion-${activeSuggestion}` : undefined} autoComplete="off" /><kbd>ENTER</kbd><button disabled={searching} onClick={() => { setSuggestionsOpen(false); void searchWord(query); }}>{searching ? "生成中…" : "查一查"}</button></div>
+          <div className="search-box"><span>⌕</span><input autoFocus value={query} onChange={(event) => { setQuery(event.target.value); setSuggestionsOpen(false); }} onFocus={() => setSuggestionsOpen(Boolean(suggestions.length) && canShowSuggestions)} onBlur={() => window.setTimeout(() => setSuggestionsOpen(false), 120)} onKeyDown={handleSearchKeyDown} placeholder="输入英文单词或短语" aria-label="输入英文单词或短语" role="combobox" aria-autocomplete="list" aria-expanded={showSuggestions} aria-controls="word-suggestions" aria-activedescendant={showSuggestions && activeSuggestion >= 0 ? `word-suggestion-${activeSuggestion}` : undefined} autoComplete="off" /><kbd>ENTER</kbd><button disabled={searching} onClick={() => { setSuggestionsOpen(false); void searchWord(query); }}>{searching ? "生成中…" : "查一查"}</button></div>
           {showSuggestions && <div className="search-suggestions" id="word-suggestions" role="listbox" aria-label="匹配的单词">{suggestions.map((suggestion, index) => <button id={`word-suggestion-${index}`} role="option" aria-selected={index === activeSuggestion} className={index === activeSuggestion ? "active" : ""} key={suggestion.word} onMouseDown={(event) => event.preventDefault()} onClick={() => void chooseSuggestion(suggestion)}><span><b>{suggestion.match === "prefix" ? <>{suggestion.word.slice(0, suggestionPrefix.length)}<mark>{suggestion.word.slice(suggestionPrefix.length)}</mark></> : suggestion.word}</b><small>{suggestion.match === "prefix" ? "自动补全" : "拼写建议"}</small></span><p>{suggestion.match === "prefix" ? "按 Enter 或 Tab 直接查词" : `与当前输入相差 ${suggestion.distance} 处`}</p></button>)}</div>}
         </div>
-        <div className="search-secondary"><div className="quick-words"><span>试试：</span>{["resilient", "ephemeral", "pragmatic", "vivid"].map((word) => <button key={word} onClick={() => searchWord(word)}>{word}</button>)}</div><SearchBatchImport groups={groups} selectedGroup={selectedGroup} onImported={onImported} /></div>
+        <div className="search-secondary"><div className="quick-words"><span>试试：</span>{["resilient", "look forward to", "in terms of"].map((word) => <button key={word} onClick={() => searchWord(word)}>{word}</button>)}</div><SearchBatchImport groups={groups} selectedGroup={defaultSearchGroup(groups, "word", selectedGroup)} onImported={onImported} /></div>
         {result ? <article className="word-card">
-          <div className="word-card-top"><WordHeading entry={result} /><div className="save-area"><select value={selectedGroup} onChange={(event) => setSelectedGroup(event.target.value)} aria-label="选择收藏分组">{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select><button onClick={save}>＋ 收藏</button></div></div>
+          <div className="word-card-top"><WordHeading entry={result} /><div className="save-area"><select value={targetGroup} onChange={(event) => setSaveTarget({ word: result.word, id: event.target.value })} aria-label="选择收藏分组">{groups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select><button onClick={save}>＋ 收藏</button></div></div>
           <WordLearningContent key={result.word} entry={result} meta={meta} groups={groups} onSaveNote={saveNote} showMetadata />
         </article> : <div className="search-empty"><span className="brand-mark"><span className="brand-eye" /></span><h2>搜索一个真正想记住的词</h2><p>这里会展示释义、例句、近反义词和你的个人笔记。</p></div>}
       </div>
@@ -259,7 +264,7 @@ function SearchView({ query, setQuery, result, groups, selectedGroup, setSelecte
 }
 
 function WordHeading({ entry }: { entry: WordEntry }) {
-  return <div><div className="word-heading"><h2>{entry.word}</h2><button className="sound-btn" onClick={() => speak(entry.word)} aria-label={`播放 ${entry.word} 发音`}>◖))</button></div><div className="phonetic"><span>EN</span>{entry.phonetic}<i>{entry.part}</i></div></div>;
+  return <div className={isPhrase(entry.word) ? "phrase-heading" : ""}><div className="word-heading"><h2>{entry.word}</h2><button className="sound-btn" onClick={() => speak(entry.word)} aria-label={`播放 ${entry.word} 发音`}>◖))</button></div><div className="phonetic"><span>{isPhrase(entry.word) ? "短语" : "EN"}</span>{entry.phonetic}<i>{entry.part}</i></div></div>;
 }
 
 function RelationCard({ type, tone, relations }: { type: string; tone: string; relations: RelationDetail[] }) {
@@ -402,7 +407,7 @@ function LibraryView({ groups, savedWords, wordMeta, selectedGroup, setSelectedG
     <div className="page-title"><div><span className="eyebrow">MY COLLECTION</span><h1>我的词库</h1><p>管理词库，或点击单词查看完整信息和个人笔记。</p></div><div className="new-group"><input value={name} onChange={(event) => setName(event.target.value)} onKeyDown={(event) => event.key === "Enter" && void create()} placeholder="新词库名称" maxLength={24} /><button onClick={() => void create()}>＋ 新建词库</button></div></div>
     <div className="group-cards">{groups.map((group) => <article key={group.id} className={`group-card ${selectedGroup === group.id ? "active" : ""}`}>
       <button className="group-select" onClick={() => setSelectedGroup(group.id)}><i style={{ background: group.color }} /><span><b>{group.name}{Boolean(group.is_default) && <em>默认</em>}</b><small>{group.word_count} 个单词 · 今日复习 {group.due_count} 个</small></span><strong>→</strong></button>
-      <div className="group-actions">{!group.is_default && <button disabled={busyGroup === group.id} onClick={() => void setDefault(group)}>设为默认</button>}<button className="danger" disabled={busyGroup === group.id || groups.length === 1} title={groups.length === 1 ? "至少保留一个词库" : `删除 ${group.name}`} onClick={() => void removeGroup(group)}>删除</button></div>
+      <div className="group-actions">{group.kind === "phrases" ? <small>短语默认收藏夹</small> : <>{!group.is_default && <button disabled={busyGroup === group.id} onClick={() => void setDefault(group)}>设为默认</button>}<button className="danger" disabled={busyGroup === group.id || groups.length === 1} title={groups.length === 1 ? "至少保留一个词库" : `删除 ${group.name}`} onClick={() => void removeGroup(group)}>删除</button></>}</div>
     </article>)}</div>
     <div className="library-list"><div className="list-head"><div><h2>{active?.name}</h2><span>{words.length} WORDS</span></div><button onClick={() => setView("cards")}>用卡片学习</button></div>{words.map((saved) => <button className="word-row" key={saved.word} onClick={() => setDetail(saved)}><span className="row-sound" onClick={(event) => { event.stopPropagation(); speak(saved.word); }}>◖))</span><span className="row-word"><b>{saved.word}</b><small>{saved.entry.phonetic}</small></span><p>{saved.entry.meaning}</p><span className={saved.repetitions > 1 ? "mastered" : "learning"}>{saved.repetitions > 1 ? "已掌握" : "学习中"}</span></button>)}</div>
     {detail && <div className="detail-overlay" role="dialog" aria-modal="true" aria-label={`${detail.word} 详情`} onClick={() => setDetail(null)}><article className="detail-drawer" onClick={(event) => event.stopPropagation()}><button className="detail-close" onClick={() => setDetail(null)} aria-label="关闭详情">×</button><WordHeading entry={detail.entry} /><WordLearningContent key={detail.word} entry={detail.entry} meta={detailMeta} groups={groups} onSaveNote={(note) => saveNote(detail.word, note)} showMetadata /><div className="drawer-actions"><button className="remove-word" onClick={() => void removeWord()}>从「{active?.name}」取消收藏</button><small>只移出当前词库；若还收藏在其他词库中，不影响其他收藏。</small></div></article></div>}

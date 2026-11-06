@@ -3,6 +3,8 @@ import { dictionary, type WordEntry } from "../lib/dictionary";
 import { relationDetails, type RelationDetail } from "../lib/relations";
 import { parseReviewOptions, planReviewQuestions, selectReviewRows, silencePendingAudio, type ReviewOptions } from "../lib/server/review-options";
 import { VideoStudyError } from "../lib/server/sql";
+import { phraseGroupId } from "../lib/terms";
+import { ensurePhraseGroup } from "../lib/server/phrase-group";
 
 export const DEMO_USER_ID = "local-demo";
 const TIME_ZONE = "Asia/Shanghai";
@@ -142,6 +144,14 @@ async function initializeDatabase() {
       },
     ]);
   }
+
+  const phraseClient = await pool.connect();
+  try {
+    await phraseClient.query("BEGIN");
+    await ensurePhraseGroup(phraseClient, DEMO_USER_ID);
+    await phraseClient.query("COMMIT");
+  } catch (error) { await phraseClient.query("ROLLBACK"); throw error; }
+  finally { phraseClient.release(); }
 
   // migrate legacy saved_words → user_words + group_words
   await pool.query(
@@ -346,9 +356,12 @@ export async function loadState() {
   const relationsByWord = relationMap(relationsRes.rows as Record<string, unknown>[]);
 
   return {
+    dictionaryFeatures: { phrases: true, maxPhraseWords: 8, maxTermLength: 96 },
     reviewFeatures: { version: 1, priorityWords: true, audioOptional: true },
     groups: groupsRes.rows.map((g: Record<string, unknown>) => ({
       ...g,
+      id: String(g.id), name: String(g.name), color: String(g.color), is_default: Number(g.is_default),
+      kind: g.id === phraseGroupId(DEMO_USER_ID) ? "phrases" : "general",
       word_count: Number(g.word_count),
       due_count: Number(g.due_count),
     })),

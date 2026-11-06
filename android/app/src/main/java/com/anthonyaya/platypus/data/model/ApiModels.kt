@@ -40,6 +40,7 @@ data class WordGroup(
     @SerializedName("is_default") val isDefault: Int = 0,
     @SerializedName("word_count") val wordCount: Int = 0,
     @SerializedName("due_count") val dueCount: Int = 0,
+    val kind: String = "general",
 )
 
 data class SavedWord(

@@ -8,7 +8,8 @@ import type { SqlExecutor } from "../lib/server/sql";
 test("review options reject malformed input and preserve priority order without duplicates", () => {
   assert.deepEqual(parseReviewOptions({}), { includeAudio: true, priorityWords: [] });
   assert.deepEqual(parseReviewOptions({ includeAudio: false, priorityWords: ["priority", "other", "priority"] }), { includeAudio: false, priorityWords: ["priority", "other"] });
-  for (const input of [{ includeAudio: "false" }, { priorityWords: "word" }, { priorityWords: ["invalid input"] }, { priorityWords: Array(201).fill("word") }]) assert.throws(() => parseReviewOptions(input));
+  assert.deepEqual(parseReviewOptions({ priorityWords: ["look forward to"] }).priorityWords, ["look forward to"]);
+  for (const input of [{ includeAudio: "false" }, { priorityWords: "word" }, { priorityWords: ["invalid,input"] }, { priorityWords: Array(201).fill("word") }]) assert.throws(() => parseReviewOptions(input));
 });
 
 test("each word receives three questions, priority words lead each round, and silent mode has no audio", () => {

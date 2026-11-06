@@ -102,7 +102,7 @@ fun PlatypusApp(
                         state = state,
                         onQueryChange = viewModel::updateQuery,
                         onSearch = viewModel::search,
-                        onSelectGroup = viewModel::selectGroup,
+                        onSelectGroup = viewModel::selectSearchGroup,
                         onSave = viewModel::saveWord,
                         onRemove = viewModel::removeWord,
                         onSaveNote = viewModel::updateNote,

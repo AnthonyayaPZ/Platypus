@@ -212,14 +212,18 @@ private fun LibraryGroupCard(
                         if (group.isDefault == 1) TinyPill("默认", modifier = Modifier.height(24.dp))
                     }
                     Text(
-                        "${group.wordCount} 个单词 · ${group.dueCount} 个待复习",
+                        "${group.wordCount} ${if (group.kind == "phrases") "个短语" else "个词条"} · ${group.dueCount} 个待复习",
                         style = MaterialTheme.typography.labelSmall,
                         color = PlatypusColors.Muted,
                     )
                 }
                 Text(if (selected) "✓" else "›", color = PlatypusColors.InkSecondary)
             }
-            if (selected && (group.isDefault != 1 || canDelete)) {
+            if (selected && group.kind == "phrases") {
+                Text("短语默认收藏夹", style = MaterialTheme.typography.labelSmall, color = PlatypusColors.Muted,
+                    modifier = Modifier.padding(start = 35.dp, bottom = 12.dp))
+            }
+            if (selected && group.kind != "phrases" && (group.isDefault != 1 || canDelete)) {
                 HorizontalDivider(color = Color(0xFFECEAE3))
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),

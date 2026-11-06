@@ -326,7 +326,7 @@ private fun AdaptiveWordTitle(
         fontSize = fontSize,
         lineHeight = (fontSize.value * 1.12f).sp,
         letterSpacing = 0.sp,
-        maxLines = 2,
+        maxLines = if (' ' in word) 5 else 2,
         softWrap = true,
         overflow = TextOverflow.Ellipsis,
         textAlign = TextAlign.Center,

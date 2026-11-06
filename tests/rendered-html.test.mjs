@@ -35,7 +35,7 @@ test("generates and caches dictionary misses on the server", async () => {
   assert.match(route, /getOrGenerateDictionaryEntry/);
   assert.match(service, /generateDictionaryEntry/);
   assert.match(service, /source: "llm-generated"/);
-  assert.match(route, /\^\[a-z\]\[a-z'-\]/);
+  assert.match(route, /normalizeDictionaryTerm/);
   assert.match(llm, /chat\/completions/);
   assert.match(llm, /API-KEY/);
   assert.match(llm, /relations\.length > 4/);

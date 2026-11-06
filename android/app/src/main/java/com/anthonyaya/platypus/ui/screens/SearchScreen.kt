@@ -140,7 +140,7 @@ fun SearchScreen(
                     )
                 }
                 Spacer(Modifier.weight(1f))
-                SearchImportEntry(state.groups, state.selectedGroupId, onImported)
+                SearchImportEntry(state.groups, com.anthonyaya.platypus.data.model.defaultSearchGroup(state.groups, "word", state.selectedGroupId), onImported)
             }
         }
 
@@ -215,7 +215,7 @@ private fun SearchBox(
                 decorationBox = { field ->
                     Box(contentAlignment = Alignment.CenterStart) {
                         if (query.isEmpty()) {
-                            Text("输入一个英文单词", color = Color(0xFFA1AAA6))
+                            Text("输入英文单词或短语", color = Color(0xFFA1AAA6))
                         }
                         field()
                     }
@@ -277,7 +277,7 @@ private fun WordCard(
     onSpeak: () -> Unit,
 ) {
     val savedInSelected = state.savedWords.any {
-        it.word == entry.word && it.groupId == state.selectedGroupId
+        it.word == entry.word && it.groupId == state.searchGroupId
     }
 
     PaperCard(modifier = Modifier.fillMaxWidth()) {
@@ -293,7 +293,7 @@ private fun WordCard(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(entry.word, style = MaterialTheme.typography.displayMedium)
+                            Text(entry.word, modifier = Modifier.weight(1f), style = if (' ' in entry.word) MaterialTheme.typography.headlineLarge else MaterialTheme.typography.displayMedium)
                             Spacer(Modifier.size(9.dp))
                             Surface(
                                 color = Color(0xFFEFF3EF),
@@ -328,16 +328,16 @@ private fun WordCard(
                 Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                     GroupDropdown(
                         groups = state.groups,
-                        selectedGroupId = state.selectedGroupId,
+                        selectedGroupId = state.searchGroupId,
                         onSelect = onSelectGroup,
                         modifier = Modifier.weight(1f),
                     )
                     Button(
                         onClick = {
-                            if (savedInSelected) onRemove(entry.word, state.selectedGroupId)
-                            else onSave(entry.word, state.selectedGroupId)
+                            if (savedInSelected) onRemove(entry.word, state.searchGroupId)
+                            else onSave(entry.word, state.searchGroupId)
                         },
-                        enabled = state.selectedGroupId.isNotEmpty() && !state.actionLoading,
+                        enabled = state.searchGroupId.isNotEmpty() && !state.actionLoading,
                         shape = RoundedCornerShape(9.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (savedInSelected) PlatypusColors.InkSecondary else PlatypusColors.Orange,

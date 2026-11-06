@@ -1,9 +1,11 @@
 import { searchDictionary, saveDictionaryEntry, ensureDatabase } from "../../db/runtime";
 import { pool } from "../../db/index";
 import type { WordEntry } from "../dictionary";
+import { normalizeDictionaryTerm } from "../terms";
 import { DictionaryGenerationError, generateDictionaryEntry, generateDictionaryEntries, generationErrorMessage } from "../llm";
 
 export async function getOrGenerateDictionaryEntry(word: string) {
+  if (normalizeDictionaryTerm(word) !== word) throw new DictionaryGenerationError("invalid-response");
   await ensureDatabase();
   const cached = await searchDictionary(word);
   if (cached) return { ...cached, source: "server-dictionary" };

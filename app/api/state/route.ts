@@ -2,6 +2,7 @@ import { pool } from "../../../db/index";
 import { saveWordToGroup } from "../../../db/learning";
 import { VideoStudyError } from "../../../lib/server/sql";
 import { parseReviewOptions } from "../../../lib/server/review-options";
+import { isPhrase, normalizeDictionaryTerm, phraseGroupId } from "../../../lib/terms";
 import {
   answerReviewTask,
   beginReviewSession,
@@ -16,7 +17,7 @@ type Action =
   | { action: "createGroup"; name: string }
   | { action: "deleteGroup"; groupId: string }
   | { action: "setDefaultGroup"; groupId: string }
-  | { action: "saveWord"; word: string; groupId: string }
+  | { action: "saveWord"; word: string; groupId?: string }
   | { action: "removeWord"; word: string; groupId: string }
   | { action: "updateNote"; word: string; note: string }
   | { action: "beginReview"; groupId: string; includeAudio?: boolean; priorityWords?: string[] }
@@ -51,6 +52,7 @@ export async function POST(request: Request) {
     }
 
     if (payload.action === "setDefaultGroup") {
+      if (payload.groupId === phraseGroupId(DEMO_USER_ID)) throw new HttpError("短语收藏夹有独立默认用途，请选择普通词库作为单词默认收藏夹", 409);
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
@@ -78,6 +80,7 @@ export async function POST(request: Request) {
     }
 
     if (payload.action === "deleteGroup") {
+      if (payload.groupId === phraseGroupId(DEMO_USER_ID)) throw new HttpError("短语收藏是内置收藏夹，可以移出其中的内容，但不能删除", 409);
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
@@ -118,18 +121,22 @@ export async function POST(request: Request) {
     }
 
     if (payload.action === "saveWord") {
-      const word = payload.word?.trim().toLowerCase();
+      if (payload.groupId !== undefined && typeof payload.groupId !== "string") throw new HttpError("收藏分组无效", 400);
+      const word = normalizeDictionaryTerm(payload.word);
+      if (!word) throw new HttpError("请输入有效的英文单词或短语", 400);
+      const groupId = payload.groupId?.trim() || (isPhrase(word) ? phraseGroupId(DEMO_USER_ID)
+        : (await pool.query("SELECT id FROM word_groups WHERE user_id=$1 AND is_default=1", [DEMO_USER_ID])).rows[0]?.id);
       const [entryRes, groupRes] = await Promise.all([
         pool.query("SELECT word FROM dictionary_entries WHERE word = $1", [word]),
         pool.query("SELECT id FROM word_groups WHERE id = $1 AND user_id = $2", [
-          payload.groupId,
+          groupId,
           DEMO_USER_ID,
         ]),
       ]);
       if (!entryRes.rows.length) return Response.json({ error: "词汇不存在" }, { status: 404 });
       if (!groupRes.rows.length) return Response.json({ error: "单词分组不存在" }, { status: 404 });
 
-      await saveWordToGroup(word, payload.groupId);
+      await saveWordToGroup(word, groupId);
       return Response.json(await loadState());
     }
 
