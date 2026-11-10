@@ -100,11 +100,7 @@ fun VideoStudyReaderContent(state: VideoLiveState, initialGroups: List<WordGroup
         if (uri != null) scope.launch {
             val text = withContext(Dispatchers.IO) {
                 runCatching { context.contentResolver.openInputStream(uri)?.use { stream ->
-                    val output = java.io.ByteArrayOutputStream()
-                    val buffer = ByteArray(8192)
-                    while (output.size() <= 500_000) { val n = stream.read(buffer); if (n < 0) break; output.write(buffer, 0, n) }
-                    require(output.size() <= 500_000) { "字幕文件不能超过 500 KB" }
-                    output.toString("UTF-8")
+                    readSubtitleUpload(stream)
                 } }.getOrElse { actions.message(it.message ?: "无法读取字幕文件"); null }
             }
             if (text != null) { subtitle = text; upload = true }
@@ -151,8 +147,13 @@ fun VideoStudyReaderContent(state: VideoLiveState, initialGroups: List<WordGroup
                 if (upload) item {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedTextField(uploadTitle, { if (it.length <= 200) uploadTitle = it }, Modifier.fillMaxWidth(), label = { Text("字幕标题") })
-                        TextButton(onClick = { picker.launch(arrayOf("*/*")) }) { Text("选择字幕文件") }
-                        OutlinedTextField(subtitle, { if (it.length <= 500_000) subtitle = it }, Modifier.fillMaxWidth().heightIn(max = 180.dp), label = { Text("或粘贴字幕内容") }, minLines = 3)
+                        TextButton(onClick = { picker.launch(arrayOf("*/*")) }) { Text("选择字幕文件 · 最长3小时 / 4 MiB") }
+                        if (subtitle.length > 10_000) {
+                            Text("已载入 ${subtitle.length} 字符字幕；提交时会上传完整内容。", style = MaterialTheme.typography.bodySmall)
+                            TextButton(onClick = { subtitle = "" }) { Text("清除并重新选择或粘贴") }
+                        } else {
+                            OutlinedTextField(subtitle, { if (it.length <= MAX_SUBTITLE_UPLOAD_BYTES) subtitle = it }, Modifier.fillMaxWidth().heightIn(max = 180.dp), label = { Text("或粘贴字幕内容") }, minLines = 3)
+                        }
                         InkButton("打开并翻译", { actions.upload(uploadTitle, subtitle); panel = ""; upload = false }, enabled = !state.busy && subtitle.isNotBlank(), modifier = Modifier.fillMaxWidth())
                     }
                 }

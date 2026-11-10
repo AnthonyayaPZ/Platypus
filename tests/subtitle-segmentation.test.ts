@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { cuesToSentences } from "../lib/subtitles";
-import { MAX_READING_WORDS, estimatedReadingRows, needsReadingSegmentation, originalSentenceFor, readingRefinementRequests, resolveOriginalSentence, segmentSubtitlesForReading, splitReadingText, splitReadingTextAtCuts, subtitleWordCount } from "../lib/subtitle-segmentation";
+import { MAX_READING_WORDS, MAX_READING_SEGMENTS, estimatedReadingRows, needsReadingSegmentation, originalSentenceFor, readingRefinementRequests, resolveOriginalSentence, segmentSubtitlesForReading, splitReadingText, splitReadingTextAtCuts, subtitleWordCount } from "../lib/subtitle-segmentation";
 import type { SubtitleSentence } from "../lib/video-study";
 
 const longSentence = "If you want to remember new words, connect them with situations from your own life, and review them regularly instead of trying to memorize everything in a single sitting.";
@@ -92,7 +92,7 @@ test("word count alone does not overlook very long words or exceed the document 
   assert.ok(splitReadingText(english).length > 1);
   assert.ok(splitReadingText(english).every((piece) => estimatedReadingRows(piece.english) <= 6));
   assert.ok(splitReadingText(Array(12).fill("interdisciplinary").join(" ")).length > 1);
-  assert.throws(() => segmentSubtitlesForReading(Array.from({ length: 2001 }, (_, index) => ({ ...source("Short."), id: `s-${index}` }))), /2000/);
+  assert.throws(() => segmentSubtitlesForReading(Array.from({ length: MAX_READING_SEGMENTS + 1 }, (_, index) => ({ ...source("Short."), id: `s-${index}` }))), /12000/);
 });
 
 test("only uncertain boundaries ask for semantic help and model cuts cannot rewrite or break constraints", () => {

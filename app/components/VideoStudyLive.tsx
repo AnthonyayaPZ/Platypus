@@ -6,6 +6,7 @@ import { addDraftWord, normalizeStudyWord, renameDraftWord, restoreDraft, tokeni
 import { exampleDocuments } from "../../lib/video-study-examples";
 import { historyItem, mergeStudyHistory, type StudyHistoryItem } from "../../lib/video-study-history";
 import VideoStudySheet, { StudyActionIcon } from "./VideoStudySheet";
+import { MAX_SUBTITLE_BYTES } from "../../lib/video-study-limits";
 
 type Group = { id: string; name: string };
 type PendingImport = { requestId: string; groupId: string; words: DraftWord[] };
@@ -46,6 +47,7 @@ export default function VideoStudyLive({ initialGroups = [], onImported }: { ini
   const [drawer, setDrawer] = useState(false);
   const [showTranslation, setShowTranslation] = useState(true);
   const [selectedOnly, setSelectedOnly] = useState(false);
+  const [pageChoice, setPageChoice] = useState({ key: "", page: 0 });
   const [manualWord, setManualWord] = useState("");
   const [editing, setEditing] = useState("");
   const [editValue, setEditValue] = useState("");
@@ -139,7 +141,7 @@ export default function VideoStudyLive({ initialGroups = [], onImported }: { ini
         if (cancelled) return;
         setDocument(data.document);
         rememberDocument(data.document);
-        if (documentActive(data.document)) timer = window.setTimeout(() => void poll(), 1800);
+        if (documentActive(data.document)) timer = window.setTimeout(() => void poll(), data.document.sentences.length > 600 ? 10_000 : 1800);
       } catch (error) {
         if (!cancelled) { setHealth(`${(error as Error).message}，联网后会恢复字幕同步。`); timer = window.setTimeout(() => void poll(), 8000); }
       }
@@ -204,6 +206,10 @@ export default function VideoStudyLive({ initialGroups = [], onImported }: { ini
   const target = groups.find((group) => group.id === groupId) ?? groups[0];
   const selected = new Set(saved.draft.map((item) => item.word));
   const sentences = (document?.sentences ?? []).filter((sentence) => !selectedOnly || tokenizeSubtitle(sentence.english).some((token) => token.word && selected.has(token.word)));
+  const readingKey = `${document?.id}:${selectedOnly}`;
+  const pageCount = Math.max(1, Math.ceil(sentences.length / 100));
+  const readingPage = Math.min(pageChoice.key === readingKey ? pageChoice.page : 0, pageCount - 1);
+  const pageSentences = sentences.slice(readingPage * 100, (readingPage + 1) * 100);
   const perform = async (label: string, action: () => Promise<void>) => {
     if (submitting.current) return;
     submitting.current = true; setBusy(label); setMessage("");
@@ -257,8 +263,8 @@ export default function VideoStudyLive({ initialGroups = [], onImported }: { ini
     </form>
     <button type="button" className="video-upload-toggle" onClick={() => setUpload(!upload)}>已有字幕？导入 SRT / VTT →</button>
     {upload && <section className="video-upload-panel"><label>字幕标题<input value={uploadTitle} onChange={(event) => setUploadTitle(event.target.value)} placeholder="例如：我的英语视频" maxLength={200}/></label>
-      <label>字幕文件<input type="file" accept=".srt,.vtt,text/vtt,text/plain" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (file.size > 500_000) { setMessage("字幕文件不能超过 500 KB。"); return; } void file.text().then(setSubtitle).catch(() => setMessage("无法读取字幕文件")); if (!uploadTitle) setUploadTitle(file.name.replace(/\.(srt|vtt)$/i, "")); }}/></label>
-      <textarea aria-label="字幕内容" value={subtitle} onChange={(event) => setSubtitle(event.target.value)} placeholder="或在这里粘贴带时间轴的 SRT / VTT 字幕" maxLength={500_000}/>
+      <label>字幕文件<input type="file" accept=".srt,.vtt,text/vtt,text/plain" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (file.size > MAX_SUBTITLE_BYTES) { setMessage("字幕文件不能超过 4 MiB，支持3小时以内字幕。"); return; } void file.text().then(setSubtitle).catch(() => setMessage("无法读取字幕文件")); if (!uploadTitle) setUploadTitle(file.name.replace(/\.(srt|vtt)$/i, "")); }}/></label>
+      <textarea aria-label="字幕内容" value={subtitle} onChange={(event) => setSubtitle(event.target.value)} placeholder="支持3小时以内、4 MiB以内的 SRT / VTT 字幕" maxLength={MAX_SUBTITLE_BYTES}/>
       <button type="button" className="video-primary-button" disabled={!subtitle.trim() || !!busy} onClick={() => void openDocument({ source: "upload", title: uploadTitle || "导入字幕", subtitle })}>整理字幕并翻译</button></section>}
     {busy && <p role="status">{busy}</p>}
     {candidates && <section className="video-candidates" aria-label="视频候选"><div className="video-section-title"><b>选择视频</b><button type="button" onClick={() => setCandidates(null)}>收起</button></div>{!candidates.length && <p>没有找到结果，请尝试视频链接。</p>}{candidates.map((candidate, index) => <button type="button" disabled={!!busy} key={candidate.id} onClick={() => void openDocument({ videoId: candidate.id })}><span className={`video-candidate-art art-${index % 2}`}>▶</span><span><b>{candidate.title}</b><small>{candidate.channel} · {candidate.duration}</small></span><span>载入 →</span></button>)}</section>}
@@ -274,7 +280,8 @@ export default function VideoStudyLive({ initialGroups = [], onImported }: { ini
         {documentActive(document) && <div className="video-demo-notice" role="status"><p>{document?.status === "translating" ? `英文已就绪，正在翻译 ${document.sentences.filter((sentence) => sentence.translationStatus === "ready").length}/${document.sentences.length} 句… 现在就可以选词。` : "字幕任务已排队，正在获取英文字幕…"}</p></div>}
         {document?.error && <div className="video-error"><p>{document.error}</p>{["failed", "partial"].includes(document.status || "") && <button type="button" disabled={!!busy} onClick={() => void retryDocument()}>重试未完成部分</button>}</div>}
         <div className="video-reading-toolbar"><span>{document?.sentences.length ?? 0} 句字幕</span><label><input type="checkbox" checked={showTranslation} onChange={(event) => setShowTranslation(event.target.checked)}/>中文翻译</label><label><input type="checkbox" checked={selectedOnly} onChange={(event) => setSelectedOnly(event.target.checked)}/>只看已选</label></div>
-        <div className="video-sentences">{sentences.map((sentence, index) => <article className="video-sentence" key={sentence.id}><div className="video-sentence-meta"><span>{sentence.time}</span><small>{String(index + 1).padStart(2, "0")}</small></div><div className="video-word-flow" aria-label={sentence.english}>{tokenizeSubtitle(sentence.english).map((token, index) => token.word ? <button type="button" key={index} aria-label={`选择单词 ${token.text}`} aria-pressed={selected.has(token.word)} disabled={running || !restored} className={selected.has(token.word) ? "selected" : ""} onClick={() => change((current) => ({ ...current, draft: selected.has(token.word!) ? current.draft.filter((item) => item.word !== token.word) : addDraftWord(current.draft, token.word!, { documentId: document!.id, title: document!.title, sentenceId: sentence.id, time: sentence.time, english: sentence.english }) }))}>{token.text}{selected.has(token.word) && <span aria-hidden="true">✓</span>}</button> : token.text.trim() ? <span className="video-punctuation" key={index}>{token.text.trim()}</span> : null)}</div>{showTranslation && <p className="video-translation">{sentence.chinese || (sentence.translationStatus === "failed" ? "本句翻译失败，可在上方重试。" : "中文翻译等待中…")}</p>}</article>)}{!sentences.length && <div className="video-loading">{document ? selectedOnly ? "没有已选单词的句子，关闭‘只看已选’试试。" : "字幕将在这里逐句显示。" : "每个英文单词都是可点击的卡片，选中的生词会暂存在右侧。"}</div>}</div>
+        {pageCount > 1 && <nav className="video-reading-toolbar" aria-label="字幕分页"><button disabled={readingPage === 0} onClick={() => setPageChoice({ key: readingKey, page: readingPage - 1 })}>上一页</button><span>{readingPage + 1} / {pageCount} 页 · 每页100句</span><button disabled={readingPage + 1 >= pageCount} onClick={() => setPageChoice({ key: readingKey, page: readingPage + 1 })}>下一页</button></nav>}
+        <div className="video-sentences">{pageSentences.map((sentence, index) => <article className="video-sentence" key={sentence.id}><div className="video-sentence-meta"><span>{sentence.time}</span><small>{String(readingPage * 100 + index + 1).padStart(2, "0")}</small></div><div className="video-word-flow" aria-label={sentence.english}>{tokenizeSubtitle(sentence.english).map((token, index) => token.word ? <button type="button" key={index} aria-label={`选择单词 ${token.text}`} aria-pressed={selected.has(token.word)} disabled={running || !restored} className={selected.has(token.word) ? "selected" : ""} onClick={() => change((current) => ({ ...current, draft: selected.has(token.word!) ? current.draft.filter((item) => item.word !== token.word) : addDraftWord(current.draft, token.word!, { documentId: document!.id, title: document!.title, sentenceId: sentence.id, time: sentence.time, english: sentence.english }) }))}>{token.text}{selected.has(token.word) && <span aria-hidden="true">✓</span>}</button> : token.text.trim() ? <span className="video-punctuation" key={index}>{token.text.trim()}</span> : null)}</div>{showTranslation && <p className="video-translation">{sentence.chinese || (sentence.translationStatus === "failed" ? "本句翻译失败，可在上方重试。" : "中文翻译等待中…")}</p>}</article>)}{!sentences.length && <div className="video-loading">{document ? selectedOnly ? "没有已选单词的句子，关闭‘只看已选’试试。" : "字幕将在这里逐句显示。" : "每个英文单词都是可点击的卡片，选中的生词会暂存在右侧。"}</div>}</div>
       </section>
       {drawer && <VideoStudySheet title="缓存区" draft onClose={() => setDrawer(false)}><aside className="video-draft-panel open" aria-label="缓存区"><div className="video-section-title"><h2>缓存区 <em>{saved.draft.length}</em></h2><button type="button" className="video-drawer-close" onClick={() => setDrawer(false)}>关闭</button></div>
         <div className="video-draft-body">{!saved.draft.length && <div className="video-draft-empty"><span>▧</span><b>把遇见的生词放进来</b><p>点选字幕中的单词，或者手动添加。</p></div>}

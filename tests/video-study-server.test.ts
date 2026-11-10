@@ -7,7 +7,7 @@ import { saveWordWithClient } from "../db/learning";
 import { DictionaryGenerationError, generateDictionaryEntries, generateDictionaryEntry, generationErrorMessage, refineSubtitleReadingCuts, translateSubtitleSentences, type SubtitleTranslationInput } from "../lib/llm";
 import { getOrGenerateDictionaryEntries } from "../lib/server/dictionary-service";
 import type { WordEntry } from "../lib/dictionary";
-import { cuesToSentences, parseSubtitleFile } from "../lib/subtitles";
+import { cuesToSentences, parseSubtitleFile, formatTimestamp } from "../lib/subtitles";
 import { youtubeVideoId } from "../lib/server/captions-client";
 import { readJsonBody } from "../lib/server/video-study-http";
 import { processVideoStudyJob } from "../lib/server/video-study-processing";
@@ -140,6 +140,49 @@ test("subtitle translation keeps English after partial failure and retries only 
     assert.equal((await store.document(document.id))?.status, "ready");
     assert.equal(downloads, 1);
     assert.equal(calls, 3);
+  } finally { await db.close(); }
+});
+
+test("uploaded three-hour subtitles bypass the YouTube cap and retry only failed translations", async () => {
+  const { db, store } = await database();
+  const oldLimit = process.env.VIDEO_STUDY_MAX_SECONDS;
+  process.env.VIDEO_STUDY_MAX_SECONDS = "60";
+  try {
+    const stamp = (ms: number) => { const value = formatTimestamp(ms); return `${value.length === 5 ? "00:" : ""}${value},000`; };
+    const subtitle = Array.from({ length: 701 }, (_, index) => `${index + 1}\n${stamp(index * 15000)} --> ${stamp(index === 700 ? 10_800_000 : (index + 1) * 15000)}\nOriginal sentence number ${index} is clear.`).join("\n\n");
+    const doc = await store.enqueueDocument({ source: "upload", title: "Three hours", subtitle });
+    let calls = 0; let failed = false;
+    const translate = async (chunk: { id: string }[]) => {
+      calls++;
+      if (calls === 2 && !failed) { failed = true; throw new DictionaryGenerationError("upstream"); }
+      return new Map(chunk.map((item) => [item.id, "对应译文"]));
+    };
+    const fetchCaptions = async () => { throw new Error("Must not download YouTube for an upload"); };
+    await processVideoStudyJob(store, (await store.claim("long-one"))!, { translate, fetchCaptions });
+    const partial = (await store.document(doc.id))!;
+    assert.equal(partial.duration, "03:00:00"); assert.equal(partial.sentences.length, 701); assert.equal(partial.status, "partial");
+    const missing = partial.sentences.filter((s) => !s.chinese).map((s) => s.id);
+    assert.equal(missing.length, 10);
+    await store.retryDocument(doc.id);
+    const retried: string[] = [];
+    await processVideoStudyJob(store, (await store.claim("long-two"))!, { fetchCaptions, translate: async (chunk) => {
+      retried.push(...chunk.map((s) => s.id)); return new Map(chunk.map((s) => [s.id, "补充译文"]));
+    } });
+    assert.deepEqual(retried, missing); assert.equal((await store.document(doc.id))?.status, "ready");
+  } finally { if (oldLimit === undefined) delete process.env.VIDEO_STUDY_MAX_SECONDS; else process.env.VIDEO_STUDY_MAX_SECONDS = oldLimit; await db.close(); }
+});
+
+test("a translation outage stops after two failed batches and retains all English for retry", async () => {
+  const { db, store } = await database();
+  try {
+    const subtitle = Array.from({ length: 100 }, (_, i) => `${i + 1}\n00:00:00,000 --> 02:59:59,000\nOriginal sentence ${i}.`).join("\n\n");
+    const doc = await store.enqueueDocument({ source: "upload", title: "Outage test", subtitle });
+    let calls = 0;
+    await processVideoStudyJob(store, (await store.claim("outage"))!, { translate: async () => { calls++; throw new DictionaryGenerationError("upstream"); } });
+    assert.equal(calls, 2);
+    const result = (await store.document(doc.id))!;
+    assert.equal(result.status, "partial"); assert.equal(result.sentences.length, 100);
+    assert.ok(result.sentences.every((s) => s.english && s.translationStatus === "failed"));
   } finally { await db.close(); }
 });
 

@@ -2,7 +2,8 @@ import type { OriginalSubtitleSentence, SubtitleSentence } from "./video-study";
 
 export const READING_SEGMENT_VERSION = 2;
 export const MAX_READING_WORDS = 24;
-export const MAX_READING_SEGMENTS = 2000;
+import { MAX_READING_SEGMENTS } from "./video-study-limits";
+export { MAX_READING_SEGMENTS } from "./video-study-limits";
 const SOFT_CHARACTERS = 132;
 
 type Word = { text: string; start: number; end: number };

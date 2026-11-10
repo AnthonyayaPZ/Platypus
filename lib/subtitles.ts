@@ -1,4 +1,5 @@
 import type { SubtitleSentence } from "./video-study";
+import { MAX_SUBTITLE_BYTES, MAX_SUBTITLE_CUES, MAX_SOURCE_SENTENCES, MAX_SUBTITLE_CHARACTERS } from "./video-study-limits";
 
 export type CaptionCue = { startMs: number; endMs: number; text: string };
 
@@ -19,7 +20,7 @@ function cleanText(text: string) {
 }
 
 export function parseSubtitleFile(text: string): CaptionCue[] {
-  if (text.length > 500_000) throw new Error("字幕文件超过 500KB 限制");
+  if (text.length > MAX_SUBTITLE_BYTES || new TextEncoder().encode(text).byteLength > MAX_SUBTITLE_BYTES) throw new Error("字幕文件不能超过 4 MiB");
   const cues: CaptionCue[] = [];
   for (const block of text.replace(/^\uFEFF/, "").replace(/\r/g, "").split(/\n\s*\n/)) {
     const lines = block.split("\n");
@@ -32,13 +33,14 @@ export function parseSubtitleFile(text: string): CaptionCue[] {
     const endMs = timestamp(match[2]);
     const content = cleanText(lines.slice(index + 1).join(" "));
     if (Number.isFinite(startMs) && endMs > startMs && content) cues.push({ startMs, endMs, text: content });
+    if (cues.length > MAX_SUBTITLE_CUES) throw new Error("字幕超过30000个时间轴片段");
   }
   if (!cues.length) throw new Error("没有识别到有效的 SRT / VTT 英文字幕");
   return cues;
 }
 
 export function cuesToSentences(cues: CaptionCue[], maximumSeconds = 3600): SubtitleSentence[] {
-  if (!cues.length || cues.length > 20_000) throw new Error("字幕为空或段落数量过多");
+  if (!cues.length || cues.length > MAX_SUBTITLE_CUES) throw new Error("字幕为空或超过30000个时间轴片段");
   const sorted = cues.filter((cue) => Number.isFinite(cue.startMs) && Number.isFinite(cue.endMs) && cue.endMs >= cue.startMs && typeof cue.text === "string").sort((a, b) => a.startMs - b.startMs);
   if (!sorted.length || sorted.some((cue) => cue.startMs < 0 || cue.endMs > maximumSeconds * 1000)) throw new Error(`请选择 ${Math.floor(maximumSeconds / 60)} 分钟以内的视频或字幕`);
   const sentences: SubtitleSentence[] = [];
@@ -82,10 +84,10 @@ export function cuesToSentences(cues: CaptionCue[], maximumSeconds = 3600): Subt
       if (index < parts.length - 1 || /[.!?]["')\]]*$/.test(part.text) || part.text.length > 2400) emit(part.text, breaks);
       else { buffer = part.text; readingBreaks = breaks; }
     }
-    if (sentences.length > 600) throw new Error("字幕超过 600 句限制，请使用较短的视频");
+    if (sentences.length > MAX_SOURCE_SENTENCES) throw new Error(`字幕超过 ${MAX_SOURCE_SENTENCES} 句限制`);
   }
   if (buffer) emit(buffer, readingBreaks);
-  if (sentences.length > 600) throw new Error("字幕超过 600 句限制，请使用较短的视频");
-  if (!sentences.length || sentences.reduce((sum, sentence) => sum + sentence.english.length, 0) > 120_000) throw new Error("字幕为空或文本过长");
+  if (sentences.length > MAX_SOURCE_SENTENCES) throw new Error(`字幕超过 ${MAX_SOURCE_SENTENCES} 句限制`);
+  if (!sentences.length || sentences.reduce((sum, sentence) => sum + sentence.english.length, 0) > MAX_SUBTITLE_CHARACTERS) throw new Error("字幕为空或英文正文超过600000字符");
   return sentences;
 }

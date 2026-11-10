@@ -1,7 +1,7 @@
 import { ensureDatabase } from "../../db/runtime";
 import { VideoStudyError } from "./sql";
 
-export async function readJsonBody(request: Request): Promise<Record<string, unknown>> {
+export async function readJsonBody(request: Request, maximumBytes = 750_000): Promise<Record<string, unknown>> {
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) throw new VideoStudyError("仅接受 JSON 请求", 415);
   const reader = request.body?.getReader();
   if (!reader) throw new VideoStudyError("请求内容为空");
@@ -11,7 +11,7 @@ export async function readJsonBody(request: Request): Promise<Record<string, unk
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > 750_000) { await reader.cancel(); throw new VideoStudyError("请求内容超过大小限制", 413); }
+    if (size > maximumBytes) { await reader.cancel(); throw new VideoStudyError("请求内容超过大小限制", 413); }
     chunks.push(value);
   }
   const data = new Uint8Array(size);

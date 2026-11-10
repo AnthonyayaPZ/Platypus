@@ -82,6 +82,7 @@ class VideoStudyLiveModel(context: Context, private val api: PlatypusApi = ApiFa
         history = mergeStudyHistory(articleStore.entries(), examples.map { it.historyItem() })))
     val state = mutable.asStateFlow()
     private var lastHealth = 0L
+    private var lastDocumentPoll = 0L
 
     init {
         viewModelScope.launch {
@@ -115,7 +116,8 @@ class VideoStudyLiveModel(context: Context, private val api: PlatypusApi = ApiFa
                 }
                 val current = mutable.value
                 if (current.session.documentId.isNotEmpty() && !current.session.documentId.startsWith("demo-") && (current.document?.id != current.session.documentId || current.document.status in listOf("queued", "fetching", "translating"))) {
-                    attempt(notify = false) {
+                    if (current.document?.id != current.session.documentId || current.document.sentences.size <= 600 || System.currentTimeMillis() - lastDocumentPoll >= 10_000) attempt(notify = false) {
+                        lastDocumentPoll = System.currentTimeMillis()
                         val id = current.session.documentId
                         val document = api.videoDocument(id).document
                         rememberDocument(document)

@@ -1,0 +1,7 @@
+export const MAX_UPLOAD_SECONDS = 3 * 60 * 60;
+export const MAX_SUBTITLE_BYTES = 4 * 1024 * 1024;
+export const MAX_UPLOAD_JSON_BYTES = MAX_SUBTITLE_BYTES * 2 + 16_384;
+export const MAX_SUBTITLE_CUES = 30_000;
+export const MAX_SOURCE_SENTENCES = 12_000;
+export const MAX_SUBTITLE_CHARACTERS = 600_000;
+export const MAX_READING_SEGMENTS = 12_000;

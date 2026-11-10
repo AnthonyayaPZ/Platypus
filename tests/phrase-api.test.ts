@@ -7,6 +7,7 @@ import { loadState, saveDictionaryEntry } from "../db/runtime";
 import { GET as search } from "../app/api/search/route";
 import { POST as action } from "../app/api/state/route";
 import { phraseGroupId } from "../lib/terms";
+import { POST as uploadSubtitle } from "../app/api/video-study/documents/route";
 
 test("real API routes cache a complete phrase, use separate defaults, honor manual selection and preserve notes", async () => {
   const db = new PGlite();
@@ -48,6 +49,12 @@ test("real API routes cache a complete phrase, use separate defaults, honor manu
     assert.equal(final.groups.find((group) => group.is_default)?.id, "default");
     assert.ok(final.savedWords.some((item) => item.word === "resilient" && item.group_id === "default"));
     assert.equal(final.wordMeta.find((item) => item.word === word)?.note, "保留这条短语笔记");
+    const upload = (subtitle: string) => uploadSubtitle(new Request("http://localhost/api/video-study/documents", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: "upload", title: "Long upload", subtitle }) }));
+    const largeSubtitle = "WEBVTT\n\n02:59:58.000 --> 03:00:00.000\nThe final sentence.\n\nNOTE\n" + "x".repeat(800_000);
+    assert.equal((await upload(largeSubtitle)).status, 202, "upload endpoint accepts the new body size and three-hour boundary");
+    const jobsBefore = (await db.query("SELECT count(*)::int AS count FROM video_study_jobs")).rows;
+    assert.equal((await upload("WEBVTT\n\n02:59:58.000 --> 03:00:00.001\nThe final sentence.")).status, 400);
+    assert.deepEqual((await db.query("SELECT count(*)::int AS count FROM video_study_jobs")).rows, jobsBefore, "overlong subtitles do not enter the queue");
   } finally {
     Object.defineProperty(pool, "query", { value: originalQuery });
     Object.defineProperty(pool, "connect", { value: originalConnect });

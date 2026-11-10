@@ -1,7 +1,8 @@
 import { saveWordToGroup } from "../../db/learning";
 import { DictionaryGenerationError, generationErrorMessage, refineSubtitleReadingCuts, translateSubtitleSentences, type SubtitleTranslationInput } from "../llm";
-import { cuesToSentences, parseSubtitleFile } from "../subtitles";
-import { originalSentenceFor, readingRefinementRequests, segmentSubtitlesForReading } from "../subtitle-segmentation";
+import { cuesToSentences, parseSubtitleFile, formatTimestamp } from "../subtitles";
+import { MAX_UPLOAD_SECONDS } from "../video-study-limits";
+import { readingRefinementRequests, segmentSubtitlesForReading } from "../subtitle-segmentation";
 import type { SubtitleSentence, WordSource } from "../video-study";
 import { fetchYouTubeCaptions } from "./captions-client";
 import { getOrGenerateDictionaryEntries } from "./dictionary-service";
@@ -29,13 +30,15 @@ async function processDocument(store: VideoStudyStore, job: ClaimedJob, deps: Pr
       const { video, cues } = await deps.fetchCaptions(input.videoId);
       document = { ...document, title: video.title, channel: video.channel, duration: video.duration, thumbnail: video.thumbnail, url: video.url, sentences: cuesToSentences(cues, maximumSeconds) };
     } else if (input.source === "upload") {
-      document = { ...document, title: input.title, channel: "手动导入字幕", sentences: cuesToSentences(parseSubtitleFile(input.subtitle), maximumSeconds) };
+      const cues = parseSubtitleFile(input.subtitle);
+      const sentences = cuesToSentences(cues, MAX_UPLOAD_SECONDS);
+      document = { ...document, title: input.title, channel: "手动导入字幕", duration: formatTimestamp(cues.reduce((end, cue) => Math.max(end, cue.endMs), 0)), sentences };
     } else throw new VideoStudyError("没有已保存的字幕，请重新选择视频或导入字幕", 422);
   }
   // Validate size before making model requests. Only uncertain cuts need help;
   // clear punctuation/clause boundaries are resolved locally without an LLM.
   segmentSubtitlesForReading(document.sentences);
-  const refinement = readingRefinementRequests(document.sentences);
+  const refinement = readingRefinementRequests(document.sentences).slice(0, 40);
   const refinedCuts = new Map<string, number[]>();
   let refinementFailures = 0;
   for (let index = 0; index < refinement.length; index += 10) {
@@ -60,24 +63,33 @@ async function processDocument(store: VideoStudyStore, job: ClaimedJob, deps: Pr
   let sentences: SubtitleSentence[] = segmentSubtitlesForReading(document.sentences, refinedCuts).map((sentence) => sentence.chinese ? { ...sentence, translationStatus: "ready" } : { ...sentence, translationStatus: "pending", translationError: "" });
   await store.updateDocument(job, { ...document, status: "translating", sentences, error: "" });
   const pending = sentences.filter((sentence) => !sentence.chinese);
+  const positions = new Map(sentences.map((sentence, index) => [sentence.id, index]));
+  const byId = new Map(sentences.map((sentence) => [sentence.id, sentence]));
   const translationBatchSize = pending.some((sentence) => sentence.readingVersion) ? 20 : 10;
+  let translationFailures = 0;
   for (let index = 0; index < pending.length; index += translationBatchSize) {
     await store.renew(job);
     const chunk = pending.slice(index, index + translationBatchSize);
+    let stopAfterChunk = false;
     try {
       const translations = await deps.translate(chunk.map((sentence) => {
-        const index = sentences.findIndex((item) => item.id === sentence.id);
-        return { id: sentence.id, english: sentence.english, context: originalSentenceFor(sentence, sentences).english,
+        const index = positions.get(sentence.id)!;
+        const original = sentence.sourceSentence ?? byId.get(sentence.sourceSentenceId ?? "")?.sourceSentence ?? sentence;
+        return { id: sentence.id, english: sentence.english, context: original.english,
           ...(index > 0 ? { previousEnglish: sentences[index - 1].english } : {}),
           ...(index + 1 < sentences.length ? { nextEnglish: sentences[index + 1].english } : {}) };
       }));
       if (chunk.some((sentence) => !translations.get(sentence.id))) throw new Error("Missing translations");
+      translationFailures = 0;
       sentences = sentences.map((sentence) => translations.has(sentence.id) ? { ...sentence, chinese: translations.get(sentence.id)!, translationStatus: "ready", translationError: "" } : sentence);
     } catch (error) {
-      const ids = new Set(chunk.map((sentence) => sentence.id));
+      translationFailures++;
+      stopAfterChunk = translationFailures >= 2 || error instanceof DictionaryGenerationError && error.code === "configuration";
+      const ids = new Set((stopAfterChunk ? pending.slice(index) : chunk).map((sentence) => sentence.id));
       sentences = sentences.map((sentence) => ids.has(sentence.id) ? { ...sentence, translationStatus: "failed", translationError: errorText(error) } : sentence);
     }
     await store.updateDocument(job, { sentences, status: "translating" });
+    if (stopAfterChunk) break;
   }
   const failed = sentences.filter((sentence) => !sentence.chinese).length;
   await store.updateDocument(job, { sentences, status: failed ? "partial" : "ready", error: failed ? `${failed} 句翻译失败，英文已保留，可重试翻译` : "" });
