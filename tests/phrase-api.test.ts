@@ -8,6 +8,7 @@ import { GET as search } from "../app/api/search/route";
 import { POST as action } from "../app/api/state/route";
 import { phraseGroupId } from "../lib/terms";
 import { POST as uploadSubtitle } from "../app/api/video-study/documents/route";
+import { GET as documentProgress } from "../app/api/video-study/documents/[id]/progress/route";
 
 test("real API routes cache a complete phrase, use separate defaults, honor manual selection and preserve notes", async () => {
   const db = new PGlite();
@@ -51,10 +52,21 @@ test("real API routes cache a complete phrase, use separate defaults, honor manu
     assert.equal(final.wordMeta.find((item) => item.word === word)?.note, "保留这条短语笔记");
     const upload = (subtitle: string) => uploadSubtitle(new Request("http://localhost/api/video-study/documents", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: "upload", title: "Long upload", subtitle }) }));
     const largeSubtitle = "WEBVTT\n\n02:59:58.000 --> 03:00:00.000\nThe final sentence.\n\nNOTE\n" + "x".repeat(800_000);
-    assert.equal((await upload(largeSubtitle)).status, 202, "upload endpoint accepts the new body size and three-hour boundary");
+    const accepted = await upload(largeSubtitle);
+    assert.equal(accepted.status, 202, "upload endpoint accepts the new body size and three-hour boundary");
+    const uploaded = await accepted.json() as { document: { id: string } };
+    const progressResponse = await documentProgress(new Request("http://localhost"), { params: Promise.resolve({ id: uploaded.document.id }) });
+    assert.equal(progressResponse.status, 200);
+    const metadata = await progressResponse.json() as { progress: { stage: string }; sentences?: unknown };
+    assert.equal(metadata.progress.stage, "queued"); assert.equal(metadata.sentences, undefined);
     const jobsBefore = (await db.query("SELECT count(*)::int AS count FROM video_study_jobs")).rows;
+    const postChoice = (resegment: unknown) => uploadSubtitle(new Request("http://localhost/api/video-study/documents", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: "upload", title: "Prepared bilingual", subtitle: "1\n00:00:00,000 --> 00:00:05,000\nKeep learning. Stay curious.\n继续学习。保持好奇心。", resegment }) }));
+    assert.equal((await postChoice("false")).status, 400);
+    assert.deepEqual((await db.query("SELECT count(*)::int AS count FROM video_study_jobs")).rows, jobsBefore);
     assert.equal((await upload("WEBVTT\n\n02:59:58.000 --> 03:00:00.001\nThe final sentence.")).status, 400);
     assert.deepEqual((await db.query("SELECT count(*)::int AS count FROM video_study_jobs")).rows, jobsBefore, "overlong subtitles do not enter the queue");
+    assert.equal((await postChoice(false)).status, 202);
+    assert.equal((await db.query<{ choice: string }>("SELECT payload->>'resegment' AS choice FROM video_study_jobs WHERE payload->>'title'='Prepared bilingual'")).rows[0].choice, "false");
   } finally {
     Object.defineProperty(pool, "query", { value: originalQuery });
     Object.defineProperty(pool, "connect", { value: originalConnect });

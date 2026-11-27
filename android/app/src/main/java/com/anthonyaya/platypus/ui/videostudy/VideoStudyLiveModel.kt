@@ -16,8 +16,13 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import retrofit2.HttpException
 import java.util.UUID
+import com.anthonyaya.platypus.data.remote.UploadProgressBody
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 
 data class VideoCandidate(val id: String, val title: String, val channel: String, val duration: String)
 data class VideoCandidatesResponse(val candidates: List<VideoCandidate>)
@@ -61,6 +66,7 @@ data class VideoLiveState(
     val candidates: List<VideoCandidate>? = null, val busy: Boolean = false,
     val message: String = "", val health: String = "正在连接服务…",
     val history: List<StudyHistoryItem> = emptyList(), val historyError: String = "",
+    val uploadPercent: Int? = null,
 ) {
     val running: Boolean get() = session.pending != null || (session.jobId.isNotEmpty() && (job == null || job.status in listOf("queued", "running")))
 }
@@ -83,6 +89,8 @@ class VideoStudyLiveModel(context: Context, private val api: PlatypusApi = ApiFa
     val state = mutable.asStateFlow()
     private var lastHealth = 0L
     private var lastDocumentPoll = 0L
+    private val legacyProgress = mutableSetOf<String>()
+    private val documentPollMutex = Mutex()
 
     init {
         viewModelScope.launch {
@@ -116,13 +124,7 @@ class VideoStudyLiveModel(context: Context, private val api: PlatypusApi = ApiFa
                 }
                 val current = mutable.value
                 if (current.session.documentId.isNotEmpty() && !current.session.documentId.startsWith("demo-") && (current.document?.id != current.session.documentId || current.document.status in listOf("queued", "fetching", "translating"))) {
-                    if (current.document?.id != current.session.documentId || current.document.sentences.size <= 600 || System.currentTimeMillis() - lastDocumentPoll >= 10_000) attempt(notify = false) {
-                        lastDocumentPoll = System.currentTimeMillis()
-                        val id = current.session.documentId
-                        val document = api.videoDocument(id).document
-                        rememberDocument(document)
-                        mutable.update { if (it.session.documentId == id) it.copy(document = document) else it }
-                    }
+                    attempt(notify = false) { pollDocument(current.session.documentId) }
                 }
                 val snapshot = mutable.value
                 if (snapshot.session.jobId.isNotEmpty() && (snapshot.job?.id != snapshot.session.jobId || snapshot.job.status in listOf("queued", "running"))) {
@@ -161,6 +163,26 @@ class VideoStudyLiveModel(context: Context, private val api: PlatypusApi = ApiFa
         rememberDocument(document, true)
         updateSession { it.copy(documentId = document.id) }
         mutable.update { it.copy(document = document, candidates = null) }
+        if (!id.startsWith("demo-")) viewModelScope.launch { attempt(notify = false) { pollDocument(id, forceFull = true) } }
+    }
+    private suspend fun pollDocument(id: String, forceFull: Boolean = false) {
+        documentPollMutex.withLock {
+            if (mutable.value.session.documentId != id) return
+            val current = mutable.value.document
+            if (!forceFull && id in legacyProgress && current?.id == id && System.currentTimeMillis() - lastDocumentPoll < 10_000) return
+            val metadata = if (id in legacyProgress) null else try { api.videoDocumentProgress(id) }
+                catch (error: HttpException) { if (error.code() == 404) { legacyProgress += id; null } else throw error }
+            if (mutable.value.session.documentId != id) return
+            if (needsSubtitleSnapshot(current, metadata, id, System.currentTimeMillis() - lastDocumentPoll, forceFull)) {
+                val document = api.videoDocument(id).document
+                if (mutable.value.session.documentId != id) return
+                rememberDocument(document)
+                lastDocumentPoll = System.currentTimeMillis()
+                mutable.update { if (it.session.documentId == id) it.copy(document = document) else it }
+            } else if (metadata != null) {
+                mutable.update { if (it.session.documentId == id) it.copy(document = it.document?.copy(status = metadata.status, error = metadata.error, progress = metadata.progress)) else it }
+            }
+        }
     }
     private suspend fun attempt(notify: Boolean = true, action: suspend () -> Unit) {
         try { action() } catch (error: CancellationException) { throw error }
@@ -177,9 +199,20 @@ class VideoStudyLiveModel(context: Context, private val api: PlatypusApi = ApiFa
         mutable.update { it.copy(candidates = candidates) }
     }
     fun openVideo(id: String) = openDocument(mapOf("videoId" to id))
-    fun uploadSubtitle(title: String, subtitle: String) = openDocument(mapOf("source" to "upload", "title" to title.ifBlank { "导入字幕" }, "subtitle" to subtitle))
-    private fun openDocument(body: Map<String, String>) = runAction {
-        val document = api.createVideoDocument(body).document
+    fun uploadSubtitle(title: String, subtitle: String, resegment: Boolean) = openDocument(mapOf("source" to "upload", "title" to title.ifBlank { "导入字幕" }, "subtitle" to subtitle, "resegment" to resegment))
+    private fun openDocument(body: Map<String, Any>) = runAction {
+        val uploading = body["source"] == "upload"
+        val document = try {
+            if (uploading) {
+                mutable.update { it.copy(uploadPercent = 0) }
+                val payload = Gson().toJson(body).toRequestBody("application/json; charset=utf-8".toMediaType())
+                api.uploadVideoDocument(UploadProgressBody(payload) { percent -> mutable.update { if (it.busy && it.uploadPercent != null) it.copy(uploadPercent = percent) else it } }).document
+            } else api.createVideoDocument(body).document
+        } catch (error: CancellationException) { throw error }
+        catch (error: Exception) {
+            if (uploading && error !is HttpException) throw IllegalArgumentException("字幕上传尚未确认，服务器可能已收到；请先查看学习记录，再决定是否重传")
+            throw error
+        } finally { mutable.update { it.copy(uploadPercent = null) } }
         rememberDocument(document, true)
         updateSession { it.copy(documentId = document.id) }
         mutable.update { it.copy(document = document, candidates = null) }

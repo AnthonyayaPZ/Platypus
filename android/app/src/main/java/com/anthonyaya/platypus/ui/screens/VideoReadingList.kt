@@ -29,6 +29,7 @@ fun VideoReadingList(
     header: @Composable () -> Unit, translationToggle: @Composable () -> Unit,
     loading: @Composable () -> Unit, error: @Composable () -> Unit,
     sentence: @Composable (SubtitleSentence) -> Unit,
+    progressVisible: Boolean = document?.id?.startsWith("demo-") == false || document?.status in listOf("queued", "fetching", "translating"),
 ) {
     val context = LocalContext.current
     val store = remember(context) { VideoReadingPositionStore(context.applicationContext) }
@@ -44,6 +45,7 @@ fun VideoReadingList(
     var filterWasAtTop by remember { mutableStateOf(false) }
     var wasFiltered by remember { mutableStateOf(selectedOnly) }
     val currentDocument by rememberUpdatedState(document)
+    val currentProgressVisible by rememberUpdatedState(progressVisible)
     val currentFilter by rememberUpdatedState(selectedOnly)
     val visible = document?.sentences.orEmpty().filter { !selectedOnly || tokenizeSubtitle(it.english).any { token -> token.word in selected } }
     val destination = document?.let { article -> offered?.let { resolveReadingPosition(article, it) } }
@@ -92,7 +94,7 @@ fun VideoReadingList(
                 withFrameNanos { }
                 val target = document?.let { article -> beforeFilter?.let { resolveReadingPosition(article, it) } }
                 if (filterWasAtTop || target == null) list.scrollToItem(0)
-                else list.scrollToItem(readingSentenceItemIndex(document, target.sentenceIndex), (target.offsetDp * density).toInt())
+                else list.scrollToItem(readingSentenceItemIndex(document, target.sentenceIndex, currentProgressVisible), (target.offsetDp * density).toInt())
                 withFrameNanos { }
             } finally { adjusting = false }
         }
@@ -132,14 +134,14 @@ fun VideoReadingList(
                                 val article = currentDocument ?: return@launch
                                 val target = offered?.let { resolveReadingPosition(article, it) } ?: return@launch
                                 offered = null
-                                list.scrollToItem(readingSentenceItemIndex(article, target.sentenceIndex), (target.offsetDp * density).toInt())
+                                list.scrollToItem(readingSentenceItemIndex(article, target.sentenceIndex, currentProgressVisible), (target.offsetDp * density).toInt())
                                 withFrameNanos { }
                             } finally { adjusting = false; saveNow() }
                         }
                     }
                 })
         }
-        if (document?.status in listOf("queued", "fetching", "translating")) item(key = "reader-progress") { loading() }
+        if (progressVisible) item(key = "reader-progress") { loading() }
         if (!document?.error.isNullOrBlank()) item(key = "reader-error") { error() }
         items(visible, key = { "sentence:${it.id}" }, contentType = { "sentence" }) { item ->
             Box(Modifier.testTag("reader-sentence-${item.id}")) { sentence(item) }

@@ -7,6 +7,9 @@ import { exampleDocuments } from "../../lib/video-study-examples";
 import { historyItem, mergeStudyHistory, type StudyHistoryItem } from "../../lib/video-study-history";
 import VideoStudySheet, { StudyActionIcon } from "./VideoStudySheet";
 import { MAX_SUBTITLE_BYTES } from "../../lib/video-study-limits";
+import SubtitleProgressCard from "./SubtitleProgressCard";
+import { makeSubtitleProgress, needsSubtitleSnapshot, type SubtitleProgressResponse } from "../../lib/video-study-progress";
+import { uploadSubtitleDocument } from "../../lib/subtitle-upload";
 
 type Group = { id: string; name: string };
 type PendingImport = { requestId: string; groupId: string; words: DraftWord[] };
@@ -53,7 +56,9 @@ export default function VideoStudyLive({ initialGroups = [], onImported }: { ini
   const [editValue, setEditValue] = useState("");
   const [upload, setUpload] = useState(false);
   const [subtitle, setSubtitle] = useState("");
+  const [resegment, setResegment] = useState(true);
   const [uploadTitle, setUploadTitle] = useState("");
+  const [uploadProgress, setUploadProgress] = useState<number | null | undefined>(undefined);
   const submitting = useRef(false);
   const importedCallback = useRef(onImported);
   useEffect(() => { importedCallback.current = onImported; }, [onImported]);
@@ -135,13 +140,28 @@ export default function VideoStudyLive({ initialGroups = [], onImported }: { ini
     if (!restored || !saved.documentId || saved.documentId.startsWith("demo-")) return;
     let cancelled = false;
     let timer: number;
+    let lastFullAt = 0;
+    let revision = "";
+    let legacy = false;
     const poll = async () => {
       try {
-        const data = await api<{ document: VideoStudyDocument }>(`documents/${encodeURIComponent(saved.documentId)}`);
+        const path = `documents/${encodeURIComponent(saved.documentId)}`;
+        let metadata: SubtitleProgressResponse | null = null;
+        if (!legacy) try { metadata = await api<SubtitleProgressResponse>(`${path}/progress`); }
+        catch (error) { if (error instanceof RequestError && error.status === 404) legacy = true; else throw error; }
         if (cancelled) return;
-        setDocument(data.document);
-        rememberDocument(data.document);
-        if (documentActive(data.document)) timer = window.setTimeout(() => void poll(), data.document.sentences.length > 600 ? 10_000 : 1800);
+        let active = metadata ? ["queued", "fetching", "translating"].includes(metadata.status ?? "") : true;
+        if (needsSubtitleSnapshot(revision, metadata, Date.now() - lastFullAt)) {
+          const data = await api<{ document: VideoStudyDocument }>(path);
+          if (cancelled) return;
+          setDocument(data.document); rememberDocument(data.document);
+          lastFullAt = Date.now(); revision = data.document.updatedAt ?? "legacy";
+          active = documentActive(data.document);
+        } else if (metadata) {
+          const currentMetadata = metadata;
+          setDocument((current) => current?.id === saved.documentId ? { ...current, status: currentMetadata.status, error: currentMetadata.error, progress: currentMetadata.progress } : current);
+        }
+        if (active) timer = window.setTimeout(() => void poll(), legacy ? 10_000 : 2000);
       } catch (error) {
         if (!cancelled) { setHealth(`${(error as Error).message}，联网后会恢复字幕同步。`); timer = window.setTimeout(() => void poll(), 8000); }
       }
@@ -217,7 +237,9 @@ export default function VideoStudyLive({ initialGroups = [], onImported }: { ini
     finally { submitting.current = false; setBusy(""); }
   };
   const openDocument = async (body: unknown) => perform("正在提交字幕任务…", async () => {
-    const data = await api<{ document: VideoStudyDocument }>("documents", body);
+    let data: { document: VideoStudyDocument };
+    try { data = (body as { source?: string })?.source === "upload" ? await uploadSubtitleDocument(body, setUploadProgress) : await api<{ document: VideoStudyDocument }>("documents", body); }
+    finally { setUploadProgress(undefined); }
     setDocument(data.document); setCandidates(null); setSelectedOnly(false); setUpload(false);
     rememberDocument(data.document, true); setPanel("");
     change((current) => ({ ...current, documentId: data.document.id }));
@@ -258,6 +280,7 @@ export default function VideoStudyLive({ initialGroups = [], onImported }: { ini
       <button type="button" className="video-history-button" onClick={() => { setDrawer(false); setPanel("history"); void refreshHistory(); }}><StudyActionIcon kind="history"/><span>学习记录</span></button></header>
     {panel === "search" && <VideoStudySheet title="查找文章" onClose={() => setPanel("")}>
     <p className="video-service-hint">{health}</p>
+    <SubtitleProgressCard upload={uploadProgress}/>
     <form className="video-title-form" onSubmit={(event) => { event.preventDefault(); void perform("正在查找视频…", async () => { const data = await api<{ candidates: VideoCandidate[] }>("search", { query }); setCandidates(data.candidates); }); }}>
       <span aria-hidden="true">▶</span><input aria-label="YouTube 视频标题或链接" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="输入 YouTube 视频标题或链接" required maxLength={200}/><button type="submit" disabled={!!busy}>查找视频</button>
     </form>
@@ -265,7 +288,8 @@ export default function VideoStudyLive({ initialGroups = [], onImported }: { ini
     {upload && <section className="video-upload-panel"><label>字幕标题<input value={uploadTitle} onChange={(event) => setUploadTitle(event.target.value)} placeholder="例如：我的英语视频" maxLength={200}/></label>
       <label>字幕文件<input type="file" accept=".srt,.vtt,text/vtt,text/plain" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (file.size > MAX_SUBTITLE_BYTES) { setMessage("字幕文件不能超过 4 MiB，支持3小时以内字幕。"); return; } void file.text().then(setSubtitle).catch(() => setMessage("无法读取字幕文件")); if (!uploadTitle) setUploadTitle(file.name.replace(/\.(srt|vtt)$/i, "")); }}/></label>
       <textarea aria-label="字幕内容" value={subtitle} onChange={(event) => setSubtitle(event.target.value)} placeholder="支持3小时以内、4 MiB以内的 SRT / VTT 字幕" maxLength={MAX_SUBTITLE_BYTES}/>
-      <button type="button" className="video-primary-button" disabled={!subtitle.trim() || !!busy} onClick={() => void openDocument({ source: "upload", title: uploadTitle || "导入字幕", subtitle })}>整理字幕并翻译</button></section>}
+      <label className="video-resegment-option"><input type="checkbox" checked={resegment} disabled={!!busy} onChange={(event) => setResegment(event.target.checked)} />重新分句<span>已整理好的双语字幕可关闭，保留原字幕块；已有中文不重复翻译。</span></label>
+      <button type="button" className="video-primary-button" disabled={!subtitle.trim() || !!busy} onClick={() => void openDocument({ source: "upload", title: uploadTitle || "导入字幕", subtitle, resegment })}>导入并学习</button></section>}
     {busy && <p role="status">{busy}</p>}
     {candidates && <section className="video-candidates" aria-label="视频候选"><div className="video-section-title"><b>选择视频</b><button type="button" onClick={() => setCandidates(null)}>收起</button></div>{!candidates.length && <p>没有找到结果，请尝试视频链接。</p>}{candidates.map((candidate, index) => <button type="button" disabled={!!busy} key={candidate.id} onClick={() => void openDocument({ videoId: candidate.id })}><span className={`video-candidate-art art-${index % 2}`}>▶</span><span><b>{candidate.title}</b><small>{candidate.channel} · {candidate.duration}</small></span><span>载入 →</span></button>)}</section>}
     </VideoStudySheet>}
@@ -277,7 +301,7 @@ export default function VideoStudyLive({ initialGroups = [], onImported }: { ini
     </VideoStudySheet>}
     <div className="video-study-grid video-reader-grid">
       <section className="video-transcript-panel" aria-label="字幕阅读区">
-        {documentActive(document) && <div className="video-demo-notice" role="status"><p>{document?.status === "translating" ? `英文已就绪，正在翻译 ${document.sentences.filter((sentence) => sentence.translationStatus === "ready").length}/${document.sentences.length} 句… 现在就可以选词。` : "字幕任务已排队，正在获取英文字幕…"}</p></div>}
+        <SubtitleProgressCard upload={panel === "search" ? undefined : uploadProgress} progress={document && !document.id.startsWith("demo-") ? document.progress ?? makeSubtitleProgress(document.status ?? "ready", document.sentences, document.updatedAt) : undefined}/>
         {document?.error && <div className="video-error"><p>{document.error}</p>{["failed", "partial"].includes(document.status || "") && <button type="button" disabled={!!busy} onClick={() => void retryDocument()}>重试未完成部分</button>}</div>}
         <div className="video-reading-toolbar"><span>{document?.sentences.length ?? 0} 句字幕</span><label><input type="checkbox" checked={showTranslation} onChange={(event) => setShowTranslation(event.target.checked)}/>中文翻译</label><label><input type="checkbox" checked={selectedOnly} onChange={(event) => setSelectedOnly(event.target.checked)}/>只看已选</label></div>
         {pageCount > 1 && <nav className="video-reading-toolbar" aria-label="字幕分页"><button disabled={readingPage === 0} onClick={() => setPageChoice({ key: readingKey, page: readingPage - 1 })}>上一页</button><span>{readingPage + 1} / {pageCount} 页 · 每页100句</span><button disabled={readingPage + 1 >= pageCount} onClick={() => setPageChoice({ key: readingKey, page: readingPage + 1 })}>下一页</button></nav>}

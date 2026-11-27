@@ -29,6 +29,13 @@
       "when": 1793589666539,
       "tag": "0003_nosy_wrecker",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794320018051,
+      "tag": "0004_subtitle_progress",
+      "breakpoints": true
     }
   ]
 }

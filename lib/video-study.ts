@@ -1,5 +1,7 @@
 export type OriginalSubtitleSentence = { id: string; time: string; english: string; chinese: string; startMs?: number; endMs?: number; readingBreaks?: number[]; aliases?: string[] };
 export type SubtitleSentence = OriginalSubtitleSentence & {
+  translationSource?: "subtitle";
+  preserveCueBreaks?: boolean;
   translationStatus?: "pending" | "ready" | "failed";
   translationError?: string;
   readingVersion?: number;
@@ -8,7 +10,7 @@ export type SubtitleSentence = OriginalSubtitleSentence & {
   // Only the first segment stores the original; following segments reference it.
   sourceSentence?: OriginalSubtitleSentence;
 };
-export type VideoStudyDocument = { id: string; title: string; channel: string; duration: string; sentences: SubtitleSentence[]; videoId?: string; url?: string; thumbnail?: string; status?: "queued" | "fetching" | "translating" | "ready" | "partial" | "failed"; error?: string; updatedAt?: string };
+export type VideoStudyDocument = { id: string; title: string; channel: string; duration: string; sentences: SubtitleSentence[]; videoId?: string; url?: string; thumbnail?: string; status?: "queued" | "fetching" | "translating" | "ready" | "partial" | "failed"; error?: string; updatedAt?: string; progress?: import("./video-study-progress").SubtitleProgress };
 export type VideoCandidate = { id: string; title: string; channel: string; duration: string; thumbnail?: string; url: string };
 export type WordSource = { documentId: string; title: string; sentenceId: string; time: string; english: string };
 export type DraftWord = { word: string; sources: WordSource[] };

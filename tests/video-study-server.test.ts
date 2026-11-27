@@ -143,6 +143,58 @@ test("subtitle translation keeps English after partial failure and retries only 
   } finally { await db.close(); }
 });
 
+test("bilingual uploads preserve cue translations, including long cues, without any model requests", async () => {
+  const { db, store } = await database();
+  try {
+    const english = "We keep every original word and its translation together because guessing how to align arbitrary English reading cuts with Chinese characters would lose the original meaning and correspondence.";
+    const doc = await store.enqueueDocument({ source: "upload", title: "Bilingual", subtitle: `1\n00:00:00,000 --> 00:00:10,000\n${english}\n保留原文以及对应译文，不猜测中英文切分关系。\n\n2\n00:00:11,000 --> 00:00:12,000\n保持好奇心。\nStay curious.` });
+    let calls = 0;
+    const unexpected = async () => { calls++; throw new Error("Bilingual subtitles must not call an API"); };
+    await processVideoStudyJob(store, (await store.claim("bilingual"))!, { translate: unexpected, refineCuts: unexpected, fetchCaptions: unexpected });
+    const result = (await store.document(doc.id))!;
+    assert.equal(calls, 0); assert.equal(result.status, "ready");
+    assert.equal(result.sentences.length, 2); assert.equal(result.sentences[0].english, english);
+    assert.equal(result.sentences[0].chinese, "保留原文以及对应译文，不猜测中英文切分关系。");
+    assert.equal(result.sentences[1].chinese, "保持好奇心。");
+    assert.equal(result.progress?.succeeded, 2); assert.equal(result.progress?.failed, 0);
+  } finally { await db.close(); }
+});
+
+test("mixed bilingual uploads translate and retry only missing Chinese, never overwrite imported translations", async () => {
+  const { db, store } = await database();
+  try {
+    const doc = await store.enqueueDocument({ source: "upload", title: "Mixed", subtitle: "1\n00:00:00,000 --> 00:00:02,000\nKeep learning.\n继续学习。\n\n2\n00:00:03,000 --> 00:00:05,000\nStay curious." });
+    const seen: string[] = [];
+    await processVideoStudyJob(store, (await store.claim("mixed"))!, { translate: async (chunk) => { seen.push(...chunk.map((s) => s.english)); throw new DictionaryGenerationError("upstream"); } });
+    assert.deepEqual(seen, ["Stay curious."]);
+    assert.equal((await store.document(doc.id))?.status, "partial");
+    await store.retryDocument(doc.id);
+    await processVideoStudyJob(store, (await store.claim("mixed-retry"))!, { translate: async (chunk) => { assert.deepEqual(chunk.map((s) => s.english), ["Stay curious."]); return new Map(chunk.map((s) => [s.id, "保持好奇心。"])); } });
+    const result = (await store.document(doc.id))!;
+    assert.equal(result.status, "ready"); assert.equal(result.sentences[0].chinese, "继续学习。");
+    assert.equal(result.sentences[0].translationSource, "subtitle");
+    assert.equal(result.sentences[1].chinese, "保持好奇心。");
+  } finally { await db.close(); }
+});
+
+test("upload resegmentation choice persists in queued jobs and keeps original bilingual blocks", async () => {
+  const { db, store } = await database();
+  try {
+    const input = { source: "upload" as const, title: "Keep breaks", subtitle: "1\n00:00:00,000 --> 00:00:05,000\nKeep learning. Stay curious.\n继续学习。保持好奇心。" };
+    const preserved = await store.enqueueDocument({ ...input, resegment: false });
+    const split = await store.enqueueDocument({ ...input, resegment: true });
+    assert.notEqual(preserved.id, split.id);
+    let calls = 0;
+    const unexpected = async () => { calls++; throw new Error("No API for bilingual captions"); };
+    for (let index = 0; index < 2; index++) await processVideoStudyJob(store, (await store.claim("choice-worker"))!, { translate: unexpected, refineCuts: unexpected });
+    assert.equal(calls, 0);
+    const kept = (await store.document(preserved.id))!;
+    assert.equal(kept.status, "ready"); assert.equal(kept.sentences.length, 1);
+    assert.equal(kept.sentences[0].preserveCueBreaks, true);
+    assert.equal((await store.document(split.id))?.sentences.length, 2);
+  } finally { await db.close(); }
+});
+
 test("uploaded three-hour subtitles bypass the YouTube cap and retry only failed translations", async () => {
   const { db, store } = await database();
   const oldLimit = process.env.VIDEO_STUDY_MAX_SECONDS;

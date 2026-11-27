@@ -6,8 +6,9 @@ import { VideoStudyError, type SqlExecutor } from "./sql";
 import { exampleDocuments } from "../video-study-examples";
 import type { StudyHistoryItem } from "../video-study-history";
 import { needsReadingSegmentation } from "../subtitle-segmentation";
+import { makeSubtitleProgress, type SubtitleProgress, type SubtitleProgressResponse } from "../video-study-progress";
 
-export type DocumentInput = { source: "youtube"; videoId: string } | { source: "upload"; title: string; subtitle: string };
+export type DocumentInput = { source: "youtube"; videoId: string } | { source: "upload"; title: string; subtitle: string; resegment?: boolean };
 export type ClaimedJob = { id: string; kind: "document" | "import"; documentId: string; payload: Record<string, unknown>; workerId: string };
 const now = () => new Date().toISOString();
 const hash = (payload: unknown) => createHash("sha256").update(JSON.stringify(payload)).digest("hex");
@@ -47,6 +48,7 @@ export class VideoStudyStore {
       duration: String(row.duration), url: String(row.url), thumbnail: String(row.thumbnail),
       status: row.status as VideoStudyDocument["status"], sentences: row.sentences as SubtitleSentence[],
       error: String(row.error), updatedAt: String(row.updated_at),
+      progress: row.progress && (row.progress as SubtitleProgress).updatedAt === String(row.updated_at) ? row.progress as SubtitleProgress : makeSubtitleProgress(row.status as SubtitleProgress["stage"], row.sentences as SubtitleSentence[], String(row.updated_at)),
     };
   }
 
@@ -64,6 +66,24 @@ export class VideoStudyStore {
     return (await this.queueReadingUpgrade(id)).document;
   }
 
+  /** Normal operation reads only small metadata, never the full subtitle JSON. */
+  async documentProgress(id: string): Promise<SubtitleProgressResponse> {
+    const { rows } = await this.sql.query("SELECT id,status,error,updated_at,progress FROM video_study_documents WHERE id=$1", [id]);
+    const row = rows[0];
+    if (!row) throw new VideoStudyError("字幕文档不存在", 404);
+    let progress = row.progress as SubtitleProgress | null;
+    if (!progress || !Number.isFinite(progress.total) || progress.updatedAt !== String(row.updated_at)) {
+      // Legacy documents have no stored counters until their next worker update.
+      const counts = (await this.sql.query(`SELECT jsonb_array_length(sentences)::int AS total,
+        (SELECT count(*)::int FROM jsonb_array_elements(sentences) s WHERE btrim(coalesce(s->>'chinese',''))<>'') AS succeeded,
+        (SELECT count(*)::int FROM jsonb_array_elements(sentences) s WHERE btrim(coalesce(s->>'chinese',''))='' AND s->>'translationStatus'='failed') AS failed
+        FROM video_study_documents WHERE id=$1`, [id])).rows[0];
+      if (!counts) throw new VideoStudyError("字幕文档不存在", 404);
+      progress = { stage: row.status as SubtitleProgress["stage"], total: Number(counts.total), succeeded: Number(counts.succeeded), failed: Number(counts.failed), processed: Number(counts.succeeded) + Number(counts.failed), updatedAt: String(row.updated_at) };
+    }
+    return { id, status: row.status as SubtitleProgressResponse["status"], error: String(row.error), updatedAt: String(row.updated_at), progress };
+  }
+
   /** Reuse cached English: never download an existing article just to split it. */
   async queueReadingUpgrade(id: string): Promise<{ document: VideoStudyDocument; queued: boolean }> {
     const document = await this.document(id);
@@ -77,7 +97,7 @@ export class VideoStudyStore {
          VALUES($1,$2,'document',$3,$4::jsonb,$5,'queued',$6,$6)
          ON CONFLICT(request_key) DO UPDATE SET status='queued',error='',worker_id='',lease_until='',updated_at=EXCLUDED.updated_at
          WHERE video_study_jobs.status IN ('completed','partial','failed') RETURNING document_id
-       ) UPDATE video_study_documents SET status='queued',error='',updated_at=$6 WHERE id IN (SELECT document_id FROM job) RETURNING id`,
+       ) UPDATE video_study_documents SET status='queued',error='',progress=NULL,updated_at=$6 WHERE id IN (SELECT document_id FROM job) RETURNING id`,
       [randomUUID(), `document:${id}`, id, JSON.stringify(payload), hash(payload), timestamp],
     );
     return { document: (await this.document(id))!, queued: !!rows.length };
@@ -87,7 +107,7 @@ export class VideoStudyStore {
     await this.sql.query(
       `WITH job AS (UPDATE video_study_jobs SET status='queued',error='',worker_id='',lease_until='',updated_at=$2
        WHERE document_id=$1 AND kind='document' AND status IN ('failed','partial') RETURNING document_id)
-       UPDATE video_study_documents SET status='queued',error='',updated_at=$2 WHERE id IN (SELECT document_id FROM job)`, [id, now()],
+       UPDATE video_study_documents SET status='queued',error='',progress=NULL,updated_at=$2 WHERE id IN (SELECT document_id FROM job)`, [id, now()],
     );
     const document = await this.document(id);
     if (!document) throw new VideoStudyError("字幕文档不存在", 404);
@@ -171,10 +191,12 @@ export class VideoStudyStore {
     if (!rows.length) throw new Error("任务归属已变更");
     const current = (await this.document(job.documentId))!;
     const next = { ...current, ...document };
+    const updatedAt = now();
+    const progress = makeSubtitleProgress(document.progress?.stage ?? document.status ?? next.progress?.stage ?? next.status ?? "ready", next.sentences, updatedAt);
     await this.sql.query(
-      `UPDATE video_study_documents SET title=$2,channel=$3,duration=$4,url=$5,thumbnail=$6,status=$7,sentences=$8::jsonb,error=$9,updated_at=$10 WHERE id=$1
+      `UPDATE video_study_documents SET title=$2,channel=$3,duration=$4,url=$5,thumbnail=$6,status=$7,sentences=$8::jsonb,error=$9,updated_at=$10,progress=$13::jsonb WHERE id=$1
        AND EXISTS(SELECT 1 FROM video_study_jobs WHERE id=$11 AND worker_id=$12 AND status='running')`,
-      [next.id, next.title, next.channel, next.duration, next.url ?? "", next.thumbnail ?? "", next.status, JSON.stringify(next.sentences), next.error ?? "", now(), job.id, job.workerId],
+      [next.id, next.title, next.channel, next.duration, next.url ?? "", next.thumbnail ?? "", next.status, JSON.stringify(next.sentences), next.error ?? "", updatedAt, job.id, job.workerId, JSON.stringify(progress)],
     );
   }
 

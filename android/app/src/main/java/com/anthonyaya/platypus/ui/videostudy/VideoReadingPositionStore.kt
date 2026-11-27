@@ -52,8 +52,9 @@ fun resolveReadingPosition(document: VideoStudyDocument, saved: VideoReadingPosi
 }
 
 /** Header, optional loading/error rows, then the stable sentence rows. */
-fun readingSentenceItemIndex(document: VideoStudyDocument, sentenceIndex: Int): Int = 1 +
-    (if (document.status in listOf("queued", "fetching", "translating")) 1 else 0) +
+fun readingSentenceItemIndex(document: VideoStudyDocument, sentenceIndex: Int,
+    progressVisible: Boolean = !document.id.startsWith("demo-") || document.status in listOf("queued", "fetching", "translating")): Int = 1 +
+    (if (progressVisible) 1 else 0) +
     (if (!document.error.isNullOrBlank()) 1 else 0) + sentenceIndex
 
 /** Separate from drafts/history so remembering a viewport cannot erase learning data. */

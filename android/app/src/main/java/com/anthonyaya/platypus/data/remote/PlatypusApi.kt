@@ -21,7 +21,13 @@ interface PlatypusApi {
     suspend fun videoSearch(@Body request: Map<String, String>): VideoCandidatesResponse
 
     @POST("api/video-study/documents")
-    suspend fun createVideoDocument(@Body request: Map<String, String>): VideoDocumentResponse
+    suspend fun createVideoDocument(@Body request: Map<String, @JvmSuppressWildcards Any>): VideoDocumentResponse
+
+    @POST("api/video-study/documents")
+    suspend fun uploadVideoDocument(@Body request: okhttp3.RequestBody): VideoDocumentResponse
+
+    @GET("api/video-study/documents/{id}/progress")
+    suspend fun videoDocumentProgress(@Path("id") id: String): SubtitleProgressResponse
 
     @GET("api/video-study/documents/{id}")
     suspend fun videoDocument(@Path("id") id: String): VideoDocumentResponse

@@ -17,6 +17,7 @@ data class VideoStudyDocument(
     val error: String? = null,
     val url: String? = null,
     val updatedAt: String? = null,
+    val progress: SubtitleProgress? = null,
 )
 
 data class SubtitleSentence(

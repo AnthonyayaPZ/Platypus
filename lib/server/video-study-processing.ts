@@ -2,6 +2,7 @@ import { saveWordToGroup } from "../../db/learning";
 import { DictionaryGenerationError, generationErrorMessage, refineSubtitleReadingCuts, translateSubtitleSentences, type SubtitleTranslationInput } from "../llm";
 import { cuesToSentences, parseSubtitleFile, formatTimestamp } from "../subtitles";
 import { MAX_UPLOAD_SECONDS } from "../video-study-limits";
+import { makeSubtitleProgress } from "../video-study-progress";
 import { readingRefinementRequests, segmentSubtitlesForReading } from "../subtitle-segmentation";
 import type { SubtitleSentence, WordSource } from "../video-study";
 import { fetchYouTubeCaptions } from "./captions-client";
@@ -24,19 +25,20 @@ async function processDocument(store: VideoStudyStore, job: ClaimedJob, deps: Pr
   let document = (await store.document(job.documentId))!;
   const input = job.payload as DocumentInput | { source: "stored" };
   if (!document.sentences.length) {
-    await store.updateDocument(job, { status: "fetching", error: "" });
+    await store.updateDocument(job, { status: "fetching", error: "", progress: makeSubtitleProgress(input.source === "upload" ? "parsing" : "fetching", []) });
     const maximumSeconds = Math.max(60, Math.min(Number(process.env.VIDEO_STUDY_MAX_SECONDS) || 3600, 7200));
     if (input.source === "youtube") {
       const { video, cues } = await deps.fetchCaptions(input.videoId);
       document = { ...document, title: video.title, channel: video.channel, duration: video.duration, thumbnail: video.thumbnail, url: video.url, sentences: cuesToSentences(cues, maximumSeconds) };
     } else if (input.source === "upload") {
       const cues = parseSubtitleFile(input.subtitle);
-      const sentences = cuesToSentences(cues, MAX_UPLOAD_SECONDS);
+      const sentences = cuesToSentences(cues, MAX_UPLOAD_SECONDS, input.resegment !== false);
       document = { ...document, title: input.title, channel: "手动导入字幕", duration: formatTimestamp(cues.reduce((end, cue) => Math.max(end, cue.endMs), 0)), sentences };
     } else throw new VideoStudyError("没有已保存的字幕，请重新选择视频或导入字幕", 422);
   }
   // Validate size before making model requests. Only uncertain cuts need help;
   // clear punctuation/clause boundaries are resolved locally without an LLM.
+  await store.updateDocument(job, { progress: makeSubtitleProgress("segmenting", document.sentences) });
   segmentSubtitlesForReading(document.sentences);
   const refinement = readingRefinementRequests(document.sentences).slice(0, 40);
   const refinedCuts = new Map<string, number[]>();
@@ -61,8 +63,13 @@ async function processDocument(store: VideoStudyStore, job: ClaimedJob, deps: Pr
     if (stop) break;
   }
   let sentences: SubtitleSentence[] = segmentSubtitlesForReading(document.sentences, refinedCuts).map((sentence) => sentence.chinese ? { ...sentence, translationStatus: "ready" } : { ...sentence, translationStatus: "pending", translationError: "" });
-  await store.updateDocument(job, { ...document, status: "translating", sentences, error: "" });
   const pending = sentences.filter((sentence) => !sentence.chinese);
+  if (!pending.length) {
+    await store.updateDocument(job, { ...document, status: "ready", sentences, error: "", progress: makeSubtitleProgress("ready", sentences) });
+    await store.finish(job, "completed");
+    return;
+  }
+  await store.updateDocument(job, { ...document, status: "translating", sentences, error: "", progress: makeSubtitleProgress("translating", sentences) });
   const positions = new Map(sentences.map((sentence, index) => [sentence.id, index]));
   const byId = new Map(sentences.map((sentence) => [sentence.id, sentence]));
   const translationBatchSize = pending.some((sentence) => sentence.readingVersion) ? 20 : 10;

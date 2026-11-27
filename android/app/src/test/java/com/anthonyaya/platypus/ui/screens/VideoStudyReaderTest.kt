@@ -22,6 +22,17 @@ import org.robolectric.annotation.Config
 class VideoStudyReaderTest {
     @get:Rule val compose = createComposeRule()
 
+    @Test fun subtitleResegmentationDefaultsOnAndCanBeDisabledForPreparedCaptions() {
+        var uploaded: Boolean? = null
+        compose.setContent { PlatypusTheme { VideoStudyReaderContent(VideoLiveState(), actions = VideoReaderActions(upload = { _, _, resegment -> uploaded = resegment })) } }
+        compose.onNodeWithTag("video-open-search").performClick()
+        compose.onNodeWithText("导入 SRT / VTT 字幕").performClick()
+        compose.onNodeWithTag("video-resegment").performScrollTo().assertIsOn().performClick().assertIsOff()
+        compose.onNodeWithText("或粘贴字幕内容").performTextInput("1\n00:00:00,000 --> 00:00:02,000\nHello.\n你好。")
+        compose.onNodeWithText("导入并学习").performScrollTo().performClick()
+        compose.runOnIdle { assertEquals(false, uploaded) }
+    }
+
     @Test fun readingTypographyUsesLargeTitleSmallerEnglishAndLargerTranslation() {
         val article = loadDemoVideoDocuments(ApplicationProvider.getApplicationContext()).first()
         compose.setContent { PlatypusTheme { VideoStudyReaderContent(VideoLiveState(document = article)) } }

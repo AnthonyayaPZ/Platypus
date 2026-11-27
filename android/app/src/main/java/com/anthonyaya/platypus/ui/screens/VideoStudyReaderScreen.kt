@@ -42,7 +42,7 @@ import kotlinx.coroutines.withContext
 
 data class VideoReaderActions(
     val search: (String) -> Unit = {}, val openVideo: (String) -> Unit = {},
-    val upload: (String, String) -> Unit = { _, _ -> }, val openArticle: (String) -> Unit = {},
+    val upload: (String, String, Boolean) -> Unit = { _, _, _ -> }, val openArticle: (String) -> Unit = {},
     val refreshHistory: () -> Unit = {}, val retryDocument: () -> Unit = {},
     val setDraft: (List<DraftWord>) -> Unit = {}, val importWords: (String) -> Unit = {},
     val retryImport: () -> Unit = {}, val message: (String) -> Unit = {},
@@ -87,6 +87,7 @@ fun VideoStudyReaderContent(state: VideoLiveState, initialGroups: List<WordGroup
     var upload by rememberSaveable { mutableStateOf(false) }
     var uploadTitle by rememberSaveable { mutableStateOf("") }
     var subtitle by remember { mutableStateOf("") }
+    var resegment by rememberSaveable { mutableStateOf(true) }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val groups = state.groups.ifEmpty { initialGroups }
@@ -118,7 +119,7 @@ fun VideoStudyReaderContent(state: VideoLiveState, initialGroups: List<WordGroup
                     TextButton(onClick = { panel = "history"; actions.refreshHistory() }, contentPadding = PaddingValues(horizontal = 4.dp), modifier = Modifier.testTag("video-open-history")) { Text("↶ 学习记录", fontSize = 12.sp) }
                 }
             }, translationToggle = { ToggleLabel("中文", showTranslation) { showTranslation = it } }, loading = {
-                Text(if (document?.status == "translating") "翻译中 ${document.sentences.count { it.chinese.isNotBlank() }}/${document.sentences.size} 句" else "正在获取字幕…", color = PlatypusColors.Muted, style = MaterialTheme.typography.bodySmall)
+                SubtitleProgressCard(document?.displayProgress() ?: SubtitleProgress(), state.uploadPercent)
             }, error = {
                 Text(document?.error.orEmpty(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 if (document?.status in listOf("partial", "failed")) TextButton(onClick = actions.retryDocument, enabled = !state.busy) { Text("重试未完成部分") }
@@ -126,7 +127,7 @@ fun VideoStudyReaderContent(state: VideoLiveState, initialGroups: List<WordGroup
                 SubtitleSentenceCard(sentence, selected, showTranslation, !state.running) { word ->
                     actions.setDraft(if (word in selected) draft.filter { it.word != word } else addDraftWord(draft, word, WordSource(document!!.id, document.title, sentence.id, sentence.time, sentence.english)))
                 }
-            })
+            }, progressVisible = state.uploadPercent != null || document?.id?.startsWith("demo-") == false)
         }
         Column(Modifier.align(Alignment.BottomEnd).padding(end = 15.dp, bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             ReaderCircle("search", "查找文章", Modifier.testTag("video-open-search")) { panel = "search" }
@@ -154,7 +155,12 @@ fun VideoStudyReaderContent(state: VideoLiveState, initialGroups: List<WordGroup
                         } else {
                             OutlinedTextField(subtitle, { if (it.length <= MAX_SUBTITLE_UPLOAD_BYTES) subtitle = it }, Modifier.fillMaxWidth().heightIn(max = 180.dp), label = { Text("或粘贴字幕内容") }, minLines = 3)
                         }
-                        InkButton("打开并翻译", { actions.upload(uploadTitle, subtitle); panel = ""; upload = false }, enabled = !state.busy && subtitle.isNotBlank(), modifier = Modifier.fillMaxWidth())
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = resegment, onCheckedChange = { resegment = it }, enabled = !state.busy, modifier = Modifier.testTag("video-resegment"))
+                            Text("重新分句", style = MaterialTheme.typography.bodyMedium)
+                        }
+                        Text("已整理好的双语字幕可关闭，保留原字幕块；已有中文不重复翻译。", style = MaterialTheme.typography.bodySmall)
+                        InkButton("导入并学习", { actions.upload(uploadTitle, subtitle, resegment); panel = ""; upload = false }, enabled = !state.busy && subtitle.isNotBlank(), modifier = Modifier.fillMaxWidth())
                     }
                 }
                 if (state.busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }

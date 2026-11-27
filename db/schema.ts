@@ -1,6 +1,7 @@
 import { pgTable, text, integer, jsonb, primaryKey, uniqueIndex, index } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { SubtitleSentence, WordSource } from "../lib/video-study";
+import type { SubtitleProgress } from "../lib/video-study-progress";
 
 export const dictionaryEntries = pgTable("dictionary_entries", {
   word: text("word").primaryKey(),
@@ -125,6 +126,7 @@ export const videoStudyDocuments = pgTable("video_study_documents", {
   thumbnail: text("thumbnail").notNull().default(""),
   status: text("status").notNull().default("queued"),
   sentences: jsonb("sentences").$type<SubtitleSentence[]>().notNull().default([]),
+  progress: jsonb("progress").$type<SubtitleProgress>(),
   error: text("error").notNull().default(""),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),

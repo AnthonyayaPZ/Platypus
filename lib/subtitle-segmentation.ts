@@ -118,11 +118,12 @@ function sentencesToPlan(sentences: SubtitleSentence[]): SubtitleSentence[] {
 }
 
 export function needsReadingSegmentation(sentences: SubtitleSentence[]) {
-  return sentencesToPlan(sentences).some((sentence) => !sentence.readingVersion && splitReadingText(sentence.english, sentence.readingBreaks).length > 1);
+  return sentencesToPlan(sentences).some((sentence) => !sentence.preserveCueBreaks && !(sentence.translationSource === "subtitle" && sentence.chinese.trim()) && !sentence.readingVersion && splitReadingText(sentence.english, sentence.readingBreaks).length > 1);
 }
 
 export function readingRefinementRequests(sentences: SubtitleSentence[]): ReadingRefinementInput[] {
   return sentencesToPlan(sentences).flatMap((sentence) => {
+    if (sentence.preserveCueBreaks || sentence.translationSource === "subtitle" && sentence.chinese.trim()) return [];
     if (sentence.readingVersion) return [];
     const pieces = splitReadingText(sentence.english, sentence.readingBreaks);
     if (pieces.length < 2) return [];
@@ -155,6 +156,9 @@ export function segmentSubtitlesForReading(sentences: SubtitleSentence[], refine
   const usedIds = new Set(sentences.map((sentence) => sentence.id));
   const result: SubtitleSentence[] = [];
   for (const sentence of sentencesToPlan(sentences)) {
+    // An imported translation is aligned to the original cue, not arbitrary
+    // English reading cuts. Preserve it without translating or guessing alignment.
+    if (sentence.preserveCueBreaks || sentence.translationSource === "subtitle" && sentence.chinese.trim()) { result.push(sentence); continue; }
     if (sentence.readingVersion) { result.push(sentence); continue; }
     let pieces = splitReadingText(sentence.english, sentence.readingBreaks);
     let assisted = false;
