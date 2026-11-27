@@ -263,7 +263,11 @@ test("collected source context is taken from the stored subtitle, not client-pro
     await processVideoStudyJob(store, (await store.claim("collector"))!, { ensureWords, saveWord });
     const sources = (await sql.query("SELECT title,time,english FROM video_word_sources")).rows;
     assert.deepEqual(sources, [{ title: "Original title", time: "00:01", english: "Stay curious." }]);
+    const note = String((await sql.query("SELECT note FROM user_words WHERE word='curious'")).rows[0].note);
+    assert.equal(note, "【视频学习 · Original title · 00:01】\nStay curious.\n保持好奇心。");
+    assert.doesNotMatch(note, /forged/);
     await saveWord("curious", "test-group", words[0].sources);
+    assert.equal((await sql.query("SELECT note FROM user_words WHERE word='curious'")).rows[0].note, note);
     assert.equal((await sql.query("SELECT * FROM video_word_sources")).rows.length, 1);
     const cached = (await store.document(document.id))!;
     await sql.query("UPDATE video_study_documents SET sentences=$2::jsonb WHERE id=$1", [document.id, JSON.stringify([
@@ -271,6 +275,69 @@ test("collected source context is taken from the stored subtitle, not client-pro
     ])]);
     await saveWord("curious", "test-group", [{ ...words[0].sources[0], sentenceId: "retired-segment" }]);
     assert.equal((await sql.query("SELECT * FROM video_word_sources")).rows.length, 1);
+    assert.equal((await sql.query("SELECT note FROM user_words WHERE word='curious'")).rows[0].note, note);
+  } finally { await db.close(); }
+});
+
+test("video imports append bilingual notes only after successful generation and preserve handwritten notes and review state", async () => {
+  const { db, sql, store, ensureWords, ensureWord, saveWord } = await database();
+  try {
+    await ensureWord("curious");
+    await sql.query("INSERT INTO user_words(user_id,word,note,first_saved_at,updated_at,ease,interval_days,repetitions,next_review,last_reviewed) VALUES('local-demo','curious','我的手写笔记  \n请保留原格式。','old','old',310,12,4,'2099-01-01','yesterday')");
+    const before = (await sql.query("SELECT first_saved_at,ease,interval_days,repetitions,next_review,last_reviewed FROM user_words WHERE word='curious'")).rows[0];
+    const doc = await store.enqueueDocument({ source: "upload", title: "Two scenes", resegment: false, subtitle: "1\n00:00:00,000 --> 00:00:02,000\nStay curious.\n保持好奇心。\n\n2\n00:00:03,000 --> 00:00:05,000\nBe curious about life.\n对生活保持好奇。" });
+    await processVideoStudyJob(store, (await store.claim("note-doc"))!);
+    const sources = ["sentence-1", "sentence-2"].map((sentenceId) => ({ documentId: doc.id, sentenceId, title: "fake", time: "fake", english: "fake" }));
+    const job = await store.enqueueImport("notes-success-retry-123", "test-group", [{ word: "curious", sources }]);
+    await processVideoStudyJob(store, (await store.claim("note-failure"))!, { ensureWords: async () => new Map([["curious", "generation failed"]]), saveWord });
+    assert.equal((await sql.query("SELECT note FROM user_words WHERE word='curious'")).rows[0].note, "我的手写笔记  \n请保留原格式。");
+    await store.retryImport(job.id);
+    await processVideoStudyJob(store, (await store.claim("note-success"))!, { ensureWords, saveWord });
+    const note = String((await sql.query("SELECT note FROM user_words WHERE word='curious'")).rows[0].note);
+    assert.ok(note.startsWith("我的手写笔记  \n请保留原格式。\n\n"));
+    assert.match(note, /Stay curious\.\n保持好奇心。/);
+    assert.match(note, /Be curious about life\.\n对生活保持好奇。/);
+    assert.doesNotMatch(note, /fake/);
+    assert.deepEqual((await sql.query("SELECT first_saved_at,ease,interval_days,repetitions,next_review,last_reviewed FROM user_words WHERE word='curious'")).rows[0], before);
+    await sql.query("INSERT INTO word_groups(id,user_id,name,color,is_default,created_at) VALUES('another','local-demo','Another','#fff',0,'now')");
+    await saveWord("curious", "another", sources);
+    assert.equal((await sql.query("SELECT note FROM user_words WHERE word='curious'")).rows[0].note, note);
+    await saveWord("curious", "test-group", [{ ...sources[0], documentId: "not-found" }]);
+    assert.equal((await sql.query("SELECT note FROM user_words WHERE word='curious'")).rows[0].note, note);
+  } finally { await db.close(); }
+});
+
+test("notes use the clicked reading segment with its own Chinese, while canonical source context remains complete", async () => {
+  const { db, sql, store, ensureWord, saveWord } = await database();
+  try {
+    const original = Array(40).fill("practice").join(" ");
+    const doc = await store.enqueueDocument({ source: "upload", title: "Reading pieces", subtitle: `1\n00:00:00,000 --> 00:00:05,000\n${original}` });
+    await processVideoStudyJob(store, (await store.claim("pieces"))!, { refineCuts: async () => new Map(), translate: async (chunk) => new Map(chunk.map((s) => [s.id, `短段译文 ${s.id}`])) });
+    const reading = (await store.document(doc.id))!.sentences[1];
+    await ensureWord("practice");
+    await saveWord("practice", "test-group", [{ documentId: doc.id, sentenceId: reading.id, title: "", time: "", english: "" }]);
+    const note = String((await sql.query("SELECT note FROM user_words WHERE word='practice'")).rows[0].note);
+    assert.ok(note.includes(`${reading.english}\n${reading.chinese}`));
+    assert.ok(!note.includes(original));
+    assert.equal((await sql.query("SELECT english FROM video_word_sources WHERE word='practice'")).rows[0].english, original);
+  } finally { await db.close(); }
+});
+
+test("demo subtitles also auto-fill notes and a full note rolls back the entire word save without truncation", async () => {
+  const { db, sql, store, ensureWord, saveWord } = await database();
+  try {
+    const demo = exampleDocuments[0];
+    await store.ensureExamples(); await ensureWord("demo");
+    const source = { documentId: demo.id, sentenceId: demo.sentences[0].id, title: "", time: "", english: "" };
+    await saveWord("demo", "test-group", [source]);
+    assert.ok(String((await sql.query("SELECT note FROM user_words WHERE word='demo'")).rows[0].note).includes(demo.sentences[0].chinese));
+    await sql.query("DELETE FROM group_words WHERE word='demo'");
+    await sql.query("DELETE FROM video_word_sources WHERE word='demo'");
+    await sql.query("UPDATE user_words SET note=$1 WHERE word='demo'", ["旧".repeat(20_000)]);
+    await assert.rejects(saveWord("demo", "test-group", [source]), /笔记已超过20000/);
+    assert.equal(String((await sql.query("SELECT note FROM user_words WHERE word='demo'")).rows[0].note).length, 20_000);
+    assert.equal((await sql.query("SELECT * FROM group_words WHERE word='demo'")).rows.length, 0);
+    assert.equal((await sql.query("SELECT * FROM video_word_sources WHERE word='demo'")).rows.length, 0);
   } finally { await db.close(); }
 });
 

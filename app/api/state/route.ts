@@ -1,5 +1,6 @@
 import { pool } from "../../../db/index";
 import { saveWordToGroup } from "../../../db/learning";
+import { MAX_WORD_NOTE_LENGTH } from "../../../lib/word-notes";
 import { VideoStudyError } from "../../../lib/server/sql";
 import { parseReviewOptions } from "../../../lib/server/review-options";
 import { isPhrase, normalizeDictionaryTerm, phraseGroupId } from "../../../lib/terms";
@@ -175,7 +176,8 @@ export async function POST(request: Request) {
         payload.word,
       ]);
       if (!entryRes.rows.length) return Response.json({ error: "词汇不存在" }, { status: 404 });
-      const note = String(payload.note ?? "").slice(0, 2000);
+      const note = String(payload.note ?? "");
+      if (note.length > MAX_WORD_NOTE_LENGTH) return Response.json({ error: "笔记不能超过20000字，内容未保存" }, { status: 400 });
       await pool.query(
         `INSERT INTO user_words
           (user_id, word, note, first_saved_at, updated_at, next_review)

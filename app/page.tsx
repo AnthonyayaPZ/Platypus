@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { MAX_WORD_NOTE_LENGTH } from "../lib/word-notes";
 import type { WordEntry } from "../lib/dictionary";
 import type { RelationDetail } from "../lib/relations";
 import { getWordSuggestions, type WordSuggestion } from "../lib/word-suggestions";
@@ -286,7 +287,7 @@ function WordLearningContent({ entry, meta, groups, onSaveNote, showMetadata = f
     <div className="meaning"><small>核心含义</small><h3>{entry.meaning}</h3><p>{entry.summary}</p></div>
     <div className="example"><span>“</span><div><p>{entry.example}</p><small>{entry.exampleZh}</small></div></div>
     {(synonymRelations.length > 0 || antonymRelations.length > 0) && <div className="detail-grid">{synonymRelations.length > 0 && <RelationCard type="相近" tone="mint" relations={synonymRelations} />}{antonymRelations.length > 0 && <RelationCard type="相反" tone="peach" relations={antonymRelations} />}</div>}
-    <div className="note-editor"><div><small>MY NOTE</small><b>我的注释</b></div><textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="记录遇到它的场景、搭配或记忆线索…" maxLength={2000} /><button disabled={saving} onClick={save}>{saving ? "保存中…" : "保存笔记"}</button></div>
+    <div className="note-editor"><div><small>MY NOTE</small><b>我的注释</b></div><textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="记录遇到它的场景、搭配或记忆线索…" maxLength={MAX_WORD_NOTE_LENGTH} /><button disabled={saving} onClick={save}>{saving ? "保存中…" : "保存笔记"}</button></div>
     {showMetadata && <div className="word-metadata"><span><small>首次记录</small><b>{formatDate(meta?.first_saved_at)}</b></span><span><small>所属单词本</small><b>{groupNames.length ? groupNames.join("、") : "尚未收藏"}</b></span><span><small>下次复习</small><b>{meta ? formatDate(meta.next_review) : "收藏后安排"}</b></span></div>}
   </>;
 }

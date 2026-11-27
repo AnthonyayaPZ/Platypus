@@ -32,7 +32,7 @@ fun NoteDialog(
         text = {
             OutlinedTextField(
                 value = note,
-                onValueChange = { if (it.length <= 2000) note = it },
+                onValueChange = { if (it.length <= 20000) note = it },
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 4,
                 label = { Text("联想、例句或易错点") },

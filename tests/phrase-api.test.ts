@@ -50,6 +50,11 @@ test("real API routes cache a complete phrase, use separate defaults, honor manu
     assert.equal(final.groups.find((group) => group.is_default)?.id, "default");
     assert.ok(final.savedWords.some((item) => item.word === "resilient" && item.group_id === "default"));
     assert.equal(final.wordMeta.find((item) => item.word === word)?.note, "保留这条短语笔记");
+    const longerNote = "例句笔记。".repeat(600);
+    assert.equal((await post({ action: "updateNote", word, note: longerNote })).status, 200);
+    assert.equal((await loadState()).wordMeta.find((item) => item.word === word)?.note, longerNote);
+    assert.equal((await post({ action: "updateNote", word, note: "x".repeat(20001) })).status, 400);
+    assert.equal((await loadState()).wordMeta.find((item) => item.word === word)?.note, longerNote);
     const upload = (subtitle: string) => uploadSubtitle(new Request("http://localhost/api/video-study/documents", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ source: "upload", title: "Long upload", subtitle }) }));
     const largeSubtitle = "WEBVTT\n\n02:59:58.000 --> 03:00:00.000\nThe final sentence.\n\nNOTE\n" + "x".repeat(800_000);
     const accepted = await upload(largeSubtitle);
